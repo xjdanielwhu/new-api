@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -40,8 +41,10 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		return
 	}
 
-	// 无条件新建 StreamStatus
-	info.StreamStatus = relaycommon.NewStreamStatus()
+	// 仅在未预置时新建 StreamStatus，保留上游可能已记录的错误状态
+	if info.StreamStatus == nil {
+		info.StreamStatus = relaycommon.NewStreamStatus()
+	}
 
 	// 确保响应体总是被关闭
 	defer func() {
@@ -57,7 +60,6 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		scanner    = bufio.NewScanner(resp.Body)
 		ticker     = time.NewTicker(streamingTimeout)
 		pingTicker *time.Ticker
-		writeMutex sync.Mutex     // Mutex to protect concurrent writes
 		wg         sync.WaitGroup // 用于等待所有 goroutine 退出
 	)
 
@@ -66,6 +68,17 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	pingInterval := time.Duration(generalSettings.PingIntervalSeconds) * time.Second
 	if pingInterval <= 0 {
 		pingInterval = DefaultPingInterval
+	}
+
+	// /v1/responses 及其 compact 端点下的 reasoning 模型（如 gpt-5 系列）响应耗时较长，
+	// 下游客户端（如 Codex++）容易因长时间未收到数据而断开连接。
+	// 因此即使后台未启用 ping，也强制启用保活，并使用更短的间隔。
+	if info.RelayMode == relayconstant.RelayModeResponses ||
+		info.RelayMode == relayconstant.RelayModeResponsesCompact {
+		pingEnabled = true
+		if pingInterval > 5*time.Second || pingInterval <= 0 {
+			pingInterval = 5 * time.Second
+		}
 	}
 
 	if pingEnabled {
@@ -110,6 +123,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	scanner.Buffer(make([]byte, InitialScannerBufferSize), getScannerBufferSize())
 	scanner.Split(bufio.ScanLines)
 	SetEventStreamHeaders(c)
+	// 初始化 SSE 写锁：ping goroutine 与 dataHandler goroutine 都会写 c.Writer，
+	// 必须串行化，否则并发写会导致 chunk 字节交错、损坏 SSE 流
+	InitStreamWriteMutex(c)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -140,32 +156,15 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			for {
 				select {
 				case <-pingTicker.C:
-					// 使用超时机制防止写操作阻塞
-					done := make(chan error, 1)
-					gopool.Go(func() {
-						writeMutex.Lock()
-						defer writeMutex.Unlock()
-						done <- PingData(c)
-					})
-
-					select {
-					case err := <-done:
-						if err != nil {
-							logger.LogError(c, "ping data error: "+err.Error())
-							info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPingFail, err)
-							return
-						}
-						if common.DebugEnabled {
-							println("ping data sent")
-						}
-					case <-time.After(10 * time.Second):
-						logger.LogError(c, "ping data send timeout")
-						info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPingFail, fmt.Errorf("ping send timeout"))
+					// PingData 内部持有 SSE 写锁，与数据事件写入串行化；
+					// 锁仅覆盖单次 write+flush，不会阻塞数据事件处理
+					if err := PingData(c); err != nil {
+						logger.LogError(c, "ping data error: "+err.Error())
+						info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPingFail, err)
 						return
-					case <-ctx.Done():
-						return
-					case <-stopChan:
-						return
+					}
+					if common.DebugEnabled {
+						println("ping data sent")
 					}
 				case <-ctx.Done():
 					return
@@ -197,9 +196,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		sr := newStreamResult(info.StreamStatus)
 		for data := range dataChan {
 			sr.reset()
-			writeMutex.Lock()
 			dataHandler(data, sr)
-			writeMutex.Unlock()
 			if sr.IsStopped() {
 				return
 			}

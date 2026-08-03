@@ -41,6 +41,7 @@ type testResult struct {
 	context     *gin.Context
 	localErr    error
 	newAPIError *types.NewAPIError
+	requestBody string
 }
 
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
@@ -256,7 +257,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	// 更新请求中的模型名称
 	request.SetModelName(testModel)
 
-	apiType, _ := common.ChannelType2APIType(channel.Type)
+	apiType, _ := common.ChannelType2APIType(channel.Type, testModel)
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact &&
 		apiType != constant.APITypeOpenAI &&
 		apiType != constant.APITypeCodex {
@@ -809,6 +810,33 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 		testRequest.MaxTokens = lo.ToPtr(uint(16))
 	}
 
+	// 智谱 V4 视觉模型要求 content 为数组格式（含 image_url），且对 stream/max_tokens 敏感
+	if strings.HasPrefix(model, "glm-") && strings.Contains(model, "v") {
+		testRequest.Messages = []dto.Message{
+			{
+				Role: "user",
+				Content: []dto.MediaContent{
+					{
+						Type: dto.ContentTypeImageURL,
+						ImageUrl: &dto.MessageImageUrl{
+							Url: "https://cloudcovert-1305175928.cos.ap-guangzhou.myqcloud.com/%E5%9B%BE%E7%89%87grounding.PNG",
+						},
+					},
+					{
+						Type: dto.ContentTypeText,
+						Text: "hi",
+					},
+				},
+			},
+		}
+		testRequest.Stream = nil
+		testRequest.StreamOptions = nil
+		testRequest.MaxTokens = nil
+		testRequest.MaxCompletionTokens = nil
+		// 智谱 GLM-5V-Turbo 官方示例要求携带 thinking 字段
+		testRequest.THINKING = json.RawMessage(`{"type":"enabled"}`)
+	}
+
 	return testRequest
 }
 
@@ -835,11 +863,24 @@ func TestChannel(c *gin.Context) {
 	endpointType := c.Query("endpoint_type")
 	isStream, _ := strconv.ParseBool(c.Query("stream"))
 	tik := time.Now()
+	if strings.TrimSpace(testModel) == "" {
+		if channel.TestModel != nil && *channel.TestModel != "" {
+			testModel = strings.TrimSpace(*channel.TestModel)
+		} else {
+			models := channel.GetModels()
+			if len(models) > 0 {
+				testModel = strings.TrimSpace(models[0])
+			}
+		}
+	}
+
+	testRequest := buildTestRequest(testModel, endpointType, channel, isStream)
+	requestBody, _ := common.Marshal(testRequest)
 	result := testChannel(channel, testModel, endpointType, isStream)
 	if result.localErr != nil {
 		resp := gin.H{
 			"success": false,
-			"message": result.localErr.Error(),
+			"message": result.localErr.Error() + "\n\n请求体:\n" + string(requestBody),
 			"time":    0.0,
 		}
 		if result.newAPIError != nil {
@@ -855,7 +896,7 @@ func TestChannel(c *gin.Context) {
 	if result.newAPIError != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success":    false,
-			"message":    result.newAPIError.Error(),
+			"message":    result.newAPIError.Error() + "\n\n请求体:\n" + string(requestBody),
 			"time":       consumedTime,
 			"error_code": result.newAPIError.GetErrorCode(),
 		})

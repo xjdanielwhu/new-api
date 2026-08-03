@@ -495,6 +495,14 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		client = service.GetHttpClient()
 	}
 
+	// 流式请求不使用 HTTP client 的总超时（Timeout 包含读取 body 的时间，会截断长流式响应）
+	// 流式超时由 StreamScannerHandler 中的 StreamingTimeout（空闲超时）接管
+	if info.IsStream && client.Timeout > 0 {
+		streamClient := *client
+		streamClient.Timeout = 0
+		client = &streamClient
+	}
+
 	var stopPinger context.CancelFunc
 	if info.IsStream {
 		helper.SetEventStreamHeaders(c)

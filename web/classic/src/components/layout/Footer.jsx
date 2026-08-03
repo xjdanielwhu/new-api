@@ -192,6 +192,14 @@ const FooterBar = () => {
           <div className='flex flex-wrap items-center gap-2'>
             <Typography.Text className='text-sm !text-semi-color-text-1'>
               © {currentYear} {systemName}. {t('版权所有')}
+              <span className='mx-2'>|</span>
+              <a href='https://beian.miit.gov.cn/' rel='nofollow' target='_blank' className='hover:text-semi-color-text-0 transition-colors'>
+                粤ICP备2025497226号-2
+              </a>
+              <span className='mx-2'>|</span>
+              <a href='https://beian.mps.gov.cn/#/query/webSearch?code=44011302005707' rel='noreferrer' target='_blank' className='hover:text-semi-color-text-0 transition-colors'>
+                粤公网安备44011302005707号
+              </a>
             </Typography.Text>
           </div>
 

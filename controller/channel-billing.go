@@ -273,20 +273,29 @@ func updateChannelDeepSeekBalance(channel *model.Channel) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	index := -1
-	for i, balanceInfo := range response.BalanceInfos {
+	if len(response.BalanceInfos) == 0 {
+		return 0, errors.New("no balance info found")
+	}
+	// DeepSeek 余额按币种返回（国内用户为 CNY），系统余额单位为 USD，
+	// 需按充值汇率折算，与 Moonshot 的处理方式保持一致
+	price := operation_setting.Price
+	if price <= 0 {
+		price = 7.3
+	}
+	balanceUsd := decimal.Zero
+	for _, balanceInfo := range response.BalanceInfos {
+		balance, err := strconv.ParseFloat(balanceInfo.TotalBalance, 64)
+		if err != nil {
+			return 0, err
+		}
 		if balanceInfo.Currency == "CNY" {
-			index = i
-			break
+			balanceUsd = balanceUsd.Add(decimal.NewFromFloat(balance).Div(decimal.NewFromFloat(price)))
+		} else {
+			// USD 及其他币种按 USD 计
+			balanceUsd = balanceUsd.Add(decimal.NewFromFloat(balance))
 		}
 	}
-	if index == -1 {
-		return 0, errors.New("currency CNY not found")
-	}
-	balance, err := strconv.ParseFloat(response.BalanceInfos[index].TotalBalance, 64)
-	if err != nil {
-		return 0, err
-	}
+	balance := balanceUsd.InexactFloat64()
 	channel.UpdateBalance(balance)
 	return balance, nil
 }

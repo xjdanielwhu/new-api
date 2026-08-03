@@ -59,6 +59,9 @@ type CustomEvent struct {
 
 func encode(writer io.Writer, event CustomEvent) error {
 	w := checkWriter(writer)
+	if event.Event != "" {
+		w.writeString(fmt.Sprintf("event: %s\n", event.Event))
+	}
 	return writeData(w, event.Data)
 }
 

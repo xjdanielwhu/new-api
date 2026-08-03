@@ -101,6 +101,16 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 
 	err = common.Unmarshal(responseBody, &errResponse)
 	if err != nil {
+		// 上游返回非 JSON 错误体（如 Cloudflare/HTML 错误页）时补充可读的 HTTP 状态信息，
+		// 避免客户端只收到 "openai_error" 而无从定位
+		if oaiErr, ok := newApiErr.RelayError.(types.OpenAIError); ok {
+			if statusText := http.StatusText(resp.StatusCode); statusText != "" {
+				oaiErr.Message = fmt.Sprintf("upstream returned %d %s", resp.StatusCode, statusText)
+			} else {
+				oaiErr.Message = fmt.Sprintf("upstream returned status %d", resp.StatusCode)
+			}
+			newApiErr.RelayError = oaiErr
+		}
 		if showBodyWhenFail {
 			newApiErr.Err = buildErrWithBody("")
 		} else {

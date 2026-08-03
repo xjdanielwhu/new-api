@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	appconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -76,7 +77,14 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = common.ReaderOnly(storage)
+		// 透传模式不经过 ConvertOpenAIResponsesRequest，需要在此清洗 input 中
+		// 非法/失效的 id（如 Codex 生成的 rs_resp_chatcmpl-... 伪 id、store=false 时的悬空引用），
+		// 否则上游会报 "Item with id ... not found" 或 id 前缀 400 错误
+		rawBody, err := io.ReadAll(storage)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
+		}
+		requestBody = bytes.NewReader(openai.SanitizeResponsesRequestBody(rawBody))
 	} else {
 		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
 		if err != nil {
@@ -101,6 +109,10 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 				return newAPIErrorFromParamOverride(err)
 			}
 		}
+
+		// 最终兜底：清洗请求体中非法/失效的 input id，
+		// 防止适配器遗漏导致上游报 "Item with id ... not found"
+		jsonData = openai.SanitizeResponsesRequestBody(jsonData)
 
 		if common.DebugEnabled {
 			println("requestBody: ", string(jsonData))

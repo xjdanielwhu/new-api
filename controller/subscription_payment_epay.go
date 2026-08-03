@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Calcium-Ion/go-epay/epay"
@@ -47,6 +48,16 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		return
 	}
 
+	// epay 为人民币支付渠道，若套餐币种为 USD，需按美元对人民币汇率转换为人民币
+	payMoney := plan.PriceAmount
+	if strings.ToUpper(plan.Currency) == "USD" {
+		payMoney = plan.PriceAmount * operation_setting.USDExchangeRate
+	}
+	if payMoney < 0.01 {
+		common.ApiErrorMsg(c, "支付金额过低")
+		return
+	}
+
 	userId := c.GetInt("id")
 	if plan.MaxPurchasePerUser > 0 {
 		count, err := model.CountUserSubscriptionsByPlan(userId, plan.Id)
@@ -84,7 +95,7 @@ func SubscriptionRequestEpay(c *gin.Context) {
 	order := &model.SubscriptionOrder{
 		UserId:          userId,
 		PlanId:          plan.Id,
-		Money:           plan.PriceAmount,
+		Money:           payMoney,
 		TradeNo:         tradeNo,
 		PaymentMethod:   req.PaymentMethod,
 		PaymentProvider: model.PaymentProviderEpay,
@@ -99,7 +110,7 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		Type:           req.PaymentMethod,
 		ServiceTradeNo: tradeNo,
 		Name:           fmt.Sprintf("SUB:%s", plan.Title),
-		Money:          strconv.FormatFloat(plan.PriceAmount, 'f', 2, 64),
+		Money:          strconv.FormatFloat(payMoney, 'f', 2, 64),
 		Device:         epay.PC,
 		NotifyUrl:      notifyUrl,
 		ReturnUrl:      returnUrl,

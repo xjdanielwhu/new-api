@@ -330,9 +330,16 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		// 转换模型推理力度后缀
 		effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(info.UpstreamModelName)
 		if effort != "" {
-			request.ReasoningEffort = effort
 			info.UpstreamModelName = originModel
 			request.Model = originModel
+		}
+
+		// gpt-5 系列模型在 /chat/completions 中不允许同时使用 reasoning_effort 和 function tools
+		// 当有工具调用时，自动关闭 reasoning_effort
+		if strings.HasPrefix(info.UpstreamModelName, "gpt-5") && len(request.Tools) > 0 {
+			request.ReasoningEffort = "none"
+		} else if effort != "" {
+			request.ReasoningEffort = effort
 		}
 
 		info.ReasoningEffort = request.ReasoningEffort
@@ -597,7 +604,178 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
 		info.ReasoningEffort = request.Reasoning.Effort
 	}
+
+	// 清洗 input 中非法的 id 字段
+	// 某些客户端（如 Codex++）会传入格式错误的 id（如 resp_chatcmpl-..._msg），
+	// OpenAI 要求 message 类型的 id 必须以 msg_ 开头，否则返回 400
+	storeDisabled := false
+	if len(request.Store) > 0 {
+		if err := common.Unmarshal(request.Store, &storeDisabled); err != nil {
+			storeDisabled = false
+		}
+	}
+	if storeDisabled {
+		// store=false 时上游不会持久化任何响应内容，
+		// previous_response_id 引用的响应必然不存在，必须移除避免 "not found" 报错
+		request.PreviousResponseID = ""
+	}
+	request.Input = SanitizeResponsesInputIDs(request.Input, storeDisabled)
+
 	return request, nil
+}
+
+// SanitizeResponsesInputIDs 清洗 Responses API input 中的非法 id 字段。
+// OpenAI 要求 input 数组中各 item 的 id 使用特定前缀（msg_, fc_, fs_, rs_ 等），
+// 客户端传入的 id 如果不匹配已知前缀则移除该字段，让 OpenAI 自动生成。
+// storeDisabled 为 true（请求 store=false）时，上游不会持久化任何 item，
+// 任何 id 引用都无法被解析（会报 "Item with id ... not found"），
+// 此时移除所有 item 的 id 字段，并整个移除 item_reference 类型的纯引用条目。
+func SanitizeResponsesInputIDs(input json.RawMessage, storeDisabled bool) json.RawMessage {
+	if len(input) == 0 {
+		return input
+	}
+
+	// input 可能是字符串（简单文本输入），直接返回
+	var rawStr string
+	if err := common.Unmarshal(input, &rawStr); err == nil {
+		return input
+	}
+
+	// 尝试解析为数组
+	var items []map[string]any
+	if err := common.Unmarshal(input, &items); err != nil {
+		return input
+	}
+
+	modified := false
+	result := items
+	if storeDisabled {
+		result = make([]map[string]any, 0, len(items))
+	}
+	for _, item := range items {
+		itemType, _ := item["type"].(string)
+
+		if storeDisabled {
+			// store=false 时 item_reference 纯引用必然无法解析，
+			// 按照 OpenAI 报错提示直接从 input 中移除该条目
+			if itemType == "item_reference" {
+				modified = true
+				continue
+			}
+			result = append(result, item)
+		}
+
+		idVal, ok := item["id"]
+		if !ok {
+			continue
+		}
+		idStr, ok := idVal.(string)
+		if !ok || idStr == "" {
+			continue
+		}
+
+		// store=false 时上游未持久化任何 item，id 引用一律无法解析，直接移除
+		removeID := storeDisabled
+		if !removeID && strings.Contains(idStr, "chatcmpl") {
+			// 由 chat/completions 风格响应合成的伪 id（如 rs_resp_chatcmpl-...、
+			// msg_resp_chatcmpl-...），上游 store 中不存在该 item，
+			// 引用会报 "Item with id ... not found"，与 item 类型无关一律移除
+			removeID = true
+		}
+		if !removeID {
+			// 根据 item 类型校验 id 前缀
+			// OpenAI 对 input 中各类型 item 的 id 有前缀要求：
+			//   - message 类型：必须以 msg_ 开头
+			//   - function_call 输出：必须以 fc_ 开头
+			//   - file_search_call 输出：必须以 fs_ 开头
+			//   - reasoning 类型：必须以 rs_ 开头
+			// 某些客户端（如 Codex++）会生成 resp__msg、resp_chatcmpl-..._msg 等非法 id，
+			// 这些会导致 OpenAI 返回 400，因此必须清洗掉。
+			var requiredPrefix string
+			switch itemType {
+			case "message":
+				requiredPrefix = "msg_"
+			case "function_call", "function_call_output":
+				requiredPrefix = "fc_"
+			case "file_search_call", "file_search_call_output":
+				requiredPrefix = "fs_"
+			case "reasoning":
+				requiredPrefix = "rs_"
+			default:
+				// 未知类型不处理，交给 OpenAI 校验
+				continue
+			}
+
+			if !strings.HasPrefix(idStr, requiredPrefix) {
+				removeID = true
+			}
+		}
+
+		if removeID {
+			delete(item, "id")
+			modified = true
+		}
+	}
+
+	if !modified {
+		return input
+	}
+
+	sanitized, err := common.Marshal(result)
+	if err != nil {
+		return input
+	}
+	return sanitized
+}
+
+// SanitizeResponsesRequestBody 对已序列化的 Responses API 请求体执行 input id 清洗。
+// 用于请求体透传（PassThroughBody）等不经过 ConvertOpenAIResponsesRequest 的场景，
+// 以及作为发送上游前的最终兜底，确保非法/失效的 id 不会发送到上游。
+func SanitizeResponsesRequestBody(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	var reqMap map[string]any
+	if err := common.Unmarshal(body, &reqMap); err != nil {
+		return body
+	}
+
+	modified := false
+
+	// store=false 时上游不持久化任何 item，id 引用一律无法解析
+	storeDisabled := false
+	if storeVal, ok := reqMap["store"]; ok {
+		if b, ok := storeVal.(bool); ok && !b {
+			storeDisabled = true
+		}
+	}
+	if storeDisabled {
+		// previous_response_id 引用的响应必然未持久化，必须移除
+		if _, ok := reqMap["previous_response_id"]; ok {
+			delete(reqMap, "previous_response_id")
+			modified = true
+		}
+	}
+
+	if inputVal, ok := reqMap["input"]; ok {
+		if inputBytes, err := common.Marshal(inputVal); err == nil {
+			sanitized := SanitizeResponsesInputIDs(json.RawMessage(inputBytes), storeDisabled)
+			var sanitizedAny any
+			if err := common.Unmarshal(sanitized, &sanitizedAny); err == nil {
+				reqMap["input"] = sanitizedAny
+				modified = true
+			}
+		}
+	}
+
+	if !modified {
+		return body
+	}
+	out, err := common.Marshal(reqMap)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {

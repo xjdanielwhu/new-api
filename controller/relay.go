@@ -209,6 +209,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
 
+		// 请求预清洗：修复客户端上下文压缩等原因产生的 tool/tool_calls 配对问题
+		//（孤儿 tool 删除、缺失响应补占位），仅在发现问题时改写请求
+		if relayFormat == types.RelayFormatOpenAI && relayInfo.RelayMode == relayconstant.RelayModeChatCompletions {
+			sanitizeChatToolPairing(c, relayInfo)
+		}
+
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:
 			newAPIError = relay.WssHelper(c, relayInfo)
@@ -217,6 +223,30 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		case types.RelayFormatGemini:
 			newAPIError = geminiRelayHandler(c, relayInfo)
 		default:
+			newAPIError = relayHandler(c, relayInfo)
+		}
+
+		// context 超长自动恢复：裁剪历史消息后用同一渠道原地重试一次，实现用户无感知
+		if newAPIError != nil && relayFormat == types.RelayFormatOpenAI &&
+			relayInfo.RelayMode == relayconstant.RelayModeChatCompletions &&
+			tryContextOverflowRecovery(c, relayInfo, newAPIError) {
+			newAPIError = relayHandler(c, relayInfo)
+		}
+
+		// 上游 413（请求体字节超限，常见于会话累积大量 base64 图片）自动恢复：
+		// 剥离历史图片后用同一渠道原地重试一次
+		if newAPIError != nil && relayFormat == types.RelayFormatOpenAI &&
+			(relayInfo.RelayMode == relayconstant.RelayModeChatCompletions ||
+				relayInfo.RelayMode == relayconstant.RelayModeResponses ||
+				relayInfo.RelayMode == relayconstant.RelayModeResponsesCompact) &&
+			tryPayloadTooLargeRecovery(c, relayInfo, newAPIError) {
+			newAPIError = relayHandler(c, relayInfo)
+		}
+
+		// tool 配对错误兜底恢复：强制清洗后原地重试一次
+		if newAPIError != nil && relayFormat == types.RelayFormatOpenAI &&
+			relayInfo.RelayMode == relayconstant.RelayModeChatCompletions &&
+			tryToolPairingRecovery(c, relayInfo, newAPIError) {
 			newAPIError = relayHandler(c, relayInfo)
 		}
 

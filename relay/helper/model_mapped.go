@@ -6,16 +6,18 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/common"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
 
-func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Request) error {
+func ModelMappedHelper(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) error {
 	if info.ChannelMeta == nil {
-		info.ChannelMeta = &common.ChannelMeta{}
+		info.ChannelMeta = &relaycommon.ChannelMeta{}
 	}
 
 	isResponsesCompact := info.RelayMode == relayconstant.RelayModeResponsesCompact
@@ -76,6 +78,10 @@ func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Reque
 	}
 	if request != nil {
 		request.SetModelName(info.UpstreamModelName)
+	}
+	// 智谱 GLM 系列模型自动走 V4 接口
+	if info.ChannelType == constant.ChannelTypeZhipu && common.IsZhipuV4Model(info.UpstreamModelName) {
+		info.ApiType = constant.APITypeZhipuV4
 	}
 	return nil
 }

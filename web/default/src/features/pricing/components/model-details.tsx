@@ -297,7 +297,7 @@ function ModelHeader(props: { model: PricingModel }) {
         )}
       </div>
       {description && (
-        <p className='text-muted-foreground mt-2 text-sm leading-relaxed'>
+        <p className='text-muted-foreground mt-2 whitespace-pre-wrap text-sm leading-relaxed'>
           {description}
         </p>
       )}

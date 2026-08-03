@@ -222,6 +222,14 @@ export function Footer(props: FooterProps) {
           <p className='text-muted-foreground/40 text-xs'>
             &copy; {currentYear} {displayName}.{' '}
             {props.copyright ?? t('footer.defaultCopyright')}
+            <span className='mx-2'>|</span>
+            <a href='https://beian.miit.gov.cn/' rel='nofollow' target='_blank' className='hover:text-muted-foreground/60 transition-colors'>
+              粤ICP备2025497226号-2
+            </a>
+            <span className='mx-2'>|</span>
+            <a href='https://beian.mps.gov.cn/#/query/webSearch?code=44011302005707' rel='noreferrer' target='_blank' className='hover:text-muted-foreground/60 transition-colors'>
+              粤公网安备44011302005707号
+            </a>
           </p>
           <ProjectAttribution currentYear={currentYear} />
         </div>

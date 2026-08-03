@@ -97,13 +97,21 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	}
 
 	if isCompact {
+		// compact 模式也需要清洗 input id
+		// codex 上游要求 store=false，item 不会被持久化，id 引用一律无法解析
+		request.PreviousResponseID = ""
+		request.Input = openai.SanitizeResponsesInputIDs(request.Input, true)
 		return request, nil
 	}
 	// codex: store must be false
 	request.Store = json.RawMessage("false")
+	// store=false 时上游不持久化响应，previous_response_id 引用必然失效
+	request.PreviousResponseID = ""
 	// rm max_output_tokens
 	request.MaxOutputTokens = nil
 	request.Temperature = nil
+	// 清洗 input 中非法的 id 字段
+	request.Input = openai.SanitizeResponsesInputIDs(request.Input, true)
 	return request, nil
 }
 

@@ -1,8 +1,17 @@
 package common
 
-import "github.com/QuantumNous/new-api/constant"
+import (
+	"strings"
 
-func ChannelType2APIType(channelType int) (int, bool) {
+	"github.com/QuantumNous/new-api/constant"
+)
+
+// IsZhipuV4Model 判断智谱模型是否应走 V4 接口（GLM 系列）
+func IsZhipuV4Model(modelName string) bool {
+	return strings.HasPrefix(modelName, "glm-")
+}
+
+func ChannelType2APIType(channelType int, modelName ...string) (int, bool) {
 	apiType := -1
 	switch channelType {
 	case constant.ChannelTypeOpenAI:
@@ -14,7 +23,12 @@ func ChannelType2APIType(channelType int) (int, bool) {
 	case constant.ChannelTypePaLM:
 		apiType = constant.APITypePaLM
 	case constant.ChannelTypeZhipu:
-		apiType = constant.APITypeZhipu
+		// 智谱 GLM 系列模型自动走 V4 接口
+		if len(modelName) > 0 && IsZhipuV4Model(modelName[0]) {
+			apiType = constant.APITypeZhipuV4
+		} else {
+			apiType = constant.APITypeZhipu
+		}
 	case constant.ChannelTypeAli:
 		apiType = constant.APITypeAli
 	case constant.ChannelTypeXunfei:

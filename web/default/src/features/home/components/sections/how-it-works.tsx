@@ -51,10 +51,10 @@ export function HowItWorks() {
               className='relative flex flex-col items-center text-center'
             >
               <div className='relative mb-6'>
-                <div className='text-muted-foreground border-border/50 bg-muted/30 flex size-16 items-center justify-center rounded-2xl border transition-colors'>
+                <div className='flex size-16 items-center justify-center rounded-2xl border border-border/50 bg-background text-muted-foreground shadow-sm transition-all'>
                   {step.icon}
                 </div>
-                <div className='bg-foreground text-background absolute -top-2 -right-2 flex size-6 items-center justify-center rounded-full text-xs font-bold'>
+                <div className='absolute -top-2 -right-2 flex size-6 items-center justify-center rounded-full bg-blue-500 text-xs font-bold text-white'>
                   {step.num}
                 </div>
               </div>

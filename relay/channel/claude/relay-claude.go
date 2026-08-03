@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -385,6 +386,29 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 						if err != nil {
 							return nil, fmt.Errorf("get file data failed: %s", err.Error())
 						}
+						// file 类型带文件名时，优先按扩展名确定 MIME 类型；
+						// 未知扩展名（octet-stream）不覆盖，保留内容嗅探结果
+						if mediaMessage.Type == dto.ContentTypeFile {
+							if file := mediaMessage.GetFile(); file != nil && file.FileName != "" {
+								if dot := strings.LastIndex(file.FileName, "."); dot != -1 && dot+1 < len(file.FileName) {
+									if extMime := service.GetMimeTypeByExtension(file.FileName[dot+1:]); extMime != "application/octet-stream" {
+										mimeType = extMime
+									}
+								}
+							}
+						}
+						// 文本类文件（txt/md/json 等）直接解码为文本内容下发，而不是当作图片
+						if strings.HasPrefix(mimeType, "text/") {
+							decoded, err := base64.StdEncoding.DecodeString(base64Data)
+							if err != nil {
+								return nil, fmt.Errorf("decode text file data failed: %s", err.Error())
+							}
+							claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
+								Type: "text",
+								Text: common.GetPointer[string](string(decoded)),
+							})
+							continue
+						}
 						claudeMediaMessage := dto.ClaudeMediaMessage{
 							Source: &dto.ClaudeMessageSource{
 								Type: "base64",
@@ -392,8 +416,11 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 						}
 						if strings.HasPrefix(mimeType, "application/pdf") {
 							claudeMediaMessage.Type = "document"
-						} else {
+						} else if strings.HasPrefix(mimeType, "image/") || mediaMessage.Type == dto.ContentTypeImageURL {
 							claudeMediaMessage.Type = "image"
+						} else {
+							// 不支持的文件类型，忽略
+							continue
 						}
 
 						claudeMediaMessage.Source.MediaType = mimeType
