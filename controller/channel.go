@@ -1952,3 +1952,14 @@ func OllamaVersion(c *gin.Context) {
 		},
 	})
 }
+
+// equalStringPtr 比较两个可空字符串字段，供渠道更新时判断敏感字段是否真的变化。
+func equalStringPtr(a, b *string) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}

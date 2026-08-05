@@ -63,6 +63,11 @@ const (
 	// It is not returned to end users, but can be persisted into consume/error logs for debugging.
 	ContextKeyAdminRejectReason ContextKey = "admin_reject_reason"
 
+	// ContextKeyAuditLogged marks that the current request has already recorded
+	// a fine-grained audit log inside its handler, so the AdminAuth/RootAuth
+	// fallback in middleware skips writing a generic one.
+	ContextKeyAuditLogged ContextKey = "audit_logged"
+
 	// ContextKeyLanguage stores the user's language preference for i18n
 	ContextKeyLanguage ContextKey = "language"
 	ContextKeyIsStream ContextKey = "is_stream"

@@ -10,9 +10,9 @@ import (
 // UserOAuthBinding stores the binding relationship between users and custom OAuth providers
 type UserOAuthBinding struct {
 	Id             int       `json:"id" gorm:"primaryKey"`
-	UserId         int       `json:"user_id" gorm:"not null;uniqueIndex:ux_user_provider"`                                        // User ID - one binding per user per provider
-	ProviderId     int       `json:"provider_id" gorm:"not null;uniqueIndex:ux_user_provider;uniqueIndex:ux_provider_userid"`     // Custom OAuth provider ID
-	ProviderUserId string    `json:"provider_user_id" gorm:"type:varchar(256);not null;uniqueIndex:ux_provider_userid"`           // User ID from OAuth provider - one OAuth account per provider
+	UserId         int       `json:"user_id" gorm:"not null;uniqueIndex:ux_user_provider"`                                    // User ID - one binding per user per provider
+	ProviderId     int       `json:"provider_id" gorm:"not null;uniqueIndex:ux_user_provider;uniqueIndex:ux_provider_userid"` // Custom OAuth provider ID
+	ProviderUserId string    `json:"provider_user_id" gorm:"type:varchar(256);not null;uniqueIndex:ux_provider_userid"`       // User ID from OAuth provider - one OAuth account per provider
 	CreatedAt      time.Time `json:"created_at"`
 }
 
@@ -144,4 +144,10 @@ func GetBindingCountByProviderId(providerId int) (int64, error) {
 	var count int64
 	err := DB.Model(&UserOAuthBinding{}).Where("provider_id = ?", providerId).Count(&count).Error
 	return count, err
+}
+
+// deleteUserOAuthBindingsByUserId 在调用方的事务内删除绑定，供用户硬删除流程
+// 与其余认证数据在同一事务中清理。
+func deleteUserOAuthBindingsByUserId(tx *gorm.DB, userId int) error {
+	return tx.Where("user_id = ?", userId).Delete(&UserOAuthBinding{}).Error
 }

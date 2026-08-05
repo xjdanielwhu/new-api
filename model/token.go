@@ -509,3 +509,21 @@ func InvalidateUserTokensCache(userId int) error {
 	}
 	return firstErr
 }
+
+// invalidateTokensCache 清理批量删除的 token 缓存，逐个继续并返回首个错误，
+// 避免单个 key 失败导致其余 token 缓存残留。
+func invalidateTokensCache(tokens []Token) error {
+	if !common.RedisEnabled {
+		return nil
+	}
+	var firstErr error
+	for _, t := range tokens {
+		if t.Key == "" {
+			continue
+		}
+		if err := cacheDeleteToken(t.Key); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
