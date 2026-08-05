@@ -121,6 +121,46 @@ function LegalLinks(props: { leadingSeparator?: boolean }) {
   )
 }
 
+// Renders mainland China ICP / public-security filing links inline with the
+// parent's copyright row. Deployment-specific; edit the record numbers here.
+function IcpLinks(props: { leadingSeparator?: boolean }) {
+  const items = [
+    {
+      key: 'icp',
+      label: '粤ICP备2025497226号-2',
+      href: 'https://beian.miit.gov.cn/',
+      rel: 'nofollow',
+    },
+    {
+      key: 'mps',
+      label: '粤公网安备44011302005707号',
+      href: 'https://beian.mps.gov.cn/#/query/webSearch?code=44011302005707',
+      rel: 'noreferrer',
+    },
+  ]
+  return (
+    <>
+      {items.map((item, index) => (
+        <Fragment key={item.key}>
+          {(props.leadingSeparator || index > 0) && (
+            <span aria-hidden='true' className='text-muted-foreground/30'>
+              ·
+            </span>
+          )}
+          <a
+            href={item.href}
+            target='_blank'
+            rel={item.rel}
+            className='hover:text-muted-foreground/60 transition-colors'
+          >
+            {item.label}
+          </a>
+        </Fragment>
+      ))}
+    </>
+  )
+}
+
 // inline=true returns just the inner span for composition in a parent flex
 // row. inline=false wraps in a centered/right-aligned div (default).
 function ProjectAttribution(props: { currentYear: number; inline?: boolean }) {
@@ -299,6 +339,7 @@ export function Footer(props: FooterProps) {
               {props.copyright ?? t('footer.defaultCopyright')}
             </span>
             <LegalLinks leadingSeparator />
+            <IcpLinks leadingSeparator />
           </div>
           <ProjectAttribution currentYear={currentYear} />
         </div>

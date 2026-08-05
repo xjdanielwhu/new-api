@@ -5248,6 +5248,11 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Common App Support": "常用应用支持",
+    "Connect to massive models through unified, standard interface protocols. Power AI applications, manage digital assets efficiently, and connect to the future.": "通过统一、标准的接口协议接入海量模型。承载 AI 应用，高效管理数字资产，连接未来。",
+    "Documentation": "文档",
+    "Massive AI Models": "海量 AI 模型",
+    "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration": "支持一键配置并完美适配 NewAPI 多协议配置"
   }
 }
