@@ -349,13 +349,13 @@ func SearchChannels(keyword string, group string, model string, idSort bool, sor
 	modelsCol := "`models`"
 
 	// 如果是 PostgreSQL，使用双引号
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		modelsCol = `"models"`
 	}
 
 	baseURLCol := "`base_url`"
 	// 如果是 PostgreSQL，使用双引号
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		baseURLCol = `"base_url"`
 	}
 
@@ -369,7 +369,7 @@ func SearchChannels(keyword string, group string, model string, idSort bool, sor
 	var args []interface{}
 	if group != "" && group != "null" {
 		var groupCondition string
-		if common.UsingMySQL {
+		if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
 			groupCondition = `CONCAT(',', ` + commonGroupCol + `, ',') LIKE ?`
 		} else {
 			// sqlite, PostgreSQL
@@ -841,13 +841,13 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 	modelsCol := "`models`"
 
 	// 如果是 PostgreSQL，使用双引号
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		modelsCol = `"models"`
 	}
 
 	baseURLCol := "`base_url`"
 	// 如果是 PostgreSQL，使用双引号
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		baseURLCol = `"base_url"`
 	}
 
@@ -864,7 +864,7 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 	var args []interface{}
 	if group != "" && group != "null" {
 		var groupCondition string
-		if common.UsingMySQL {
+		if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
 			groupCondition = `CONCAT(',', ` + commonGroupCol + `, ',') LIKE ?`
 		} else {
 			// sqlite, PostgreSQL
