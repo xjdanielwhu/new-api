@@ -218,7 +218,7 @@ export function SummaryCards() {
     } else if (runwayDays > 999) {
       runwayDisplay = `999+ ${t('days')}`
     } else {
-      runwayDisplay = `~${formatNumber(Math.floor(runwayDays))} ${t('days')}`
+      runwayDisplay = `≈${formatNumber(Math.floor(runwayDays))} ${t('days')}`
     }
   } else if (remainQuota <= 0) {
     runwayDisplay = t('Balance depleted')
