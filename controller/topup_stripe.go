@@ -348,7 +348,7 @@ func genStripeLink(referenceId string, customerId string, email string, amount i
 
 	// Use custom URLs if provided, otherwise use defaults
 	if successURL == "" {
-		successURL = system_setting.ServerAddress + "/console/log"
+		successURL = system_setting.ServerAddress + "/console/topup?show_history=true"
 	}
 	if cancelURL == "" {
 		cancelURL = system_setting.ServerAddress + "/console/topup"
