@@ -1,0 +1,23 @@
+# Ignore rules specific to Dockerfile.localdist.
+# Same as .dockerignore, except the pre-built frontend dist directories are
+# kept because this Dockerfile embeds them from the host instead of building
+# the frontend inside the image.
+.github
+.git
+*.md
+.vscode
+.gitignore
+Makefile
+docs
+.eslintcache
+.gocache
+/web/node_modules
+/web/default/node_modules
+/web/classic/node_modules
+# 本地产物与运行数据，不参与镜像构建
+/runtime-data
+/data
+/logs
+*.tar
+*.db
+/.wy-patches

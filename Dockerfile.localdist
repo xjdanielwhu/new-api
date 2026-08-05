@@ -7,7 +7,11 @@
 #   cd web/classic && bun install && bun run build
 #
 # Build command:
-#   docker build -f Dockerfile.localdist -t new-api:local .
+#   docker build -f Dockerfile.localdist -t new-api-v2:local .
+#
+# The dist directories are excluded by .dockerignore, so this Dockerfile relies
+# on its own Dockerfile.localdist.dockerignore (BuildKit per-Dockerfile ignore
+# file) to keep them in the build context.
 
 FROM golang:1.26.1-alpine@sha256:2389ebfa5b7f43eeafbd6be0c3700cc46690ef842ad962f6c5bd6be49ed82039 AS builder2
 ENV GO111MODULE=on CGO_ENABLED=0
