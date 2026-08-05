@@ -99,6 +99,28 @@ const AccountManagement = ({
   const isBound = (accountId) => Boolean(accountId);
   const [showTelegramBindModal, setShowTelegramBindModal] =
     React.useState(false);
+  const [telegramBindFlowToken, setTelegramBindFlowToken] =
+    React.useState('');
+  const [telegramBindLoading, setTelegramBindLoading] = React.useState(false);
+
+  // Telegram 绑定为两步流程：先取一次性 flow_token，再由 Telegram 回调该地址
+  const openTelegramBindModal = async () => {
+    setTelegramBindLoading(true);
+    try {
+      const res = await API.post('/api/oauth/telegram/bind/start');
+      const { success, message, data } = res.data;
+      if (!success) {
+        showError(message);
+        return;
+      }
+      setTelegramBindFlowToken(data?.flow_token || '');
+      setShowTelegramBindModal(true);
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      setTelegramBindLoading(false);
+    }
+  };
   const [customOAuthBindings, setCustomOAuthBindings] = React.useState([]);
   const [customOAuthLoading, setCustomOAuthLoading] = React.useState({});
 
@@ -439,7 +461,8 @@ const AccountManagement = ({
                           type='primary'
                           theme='outline'
                           size='small'
-                          onClick={() => setShowTelegramBindModal(true)}
+                          loading={telegramBindLoading}
+                          onClick={openTelegramBindModal}
                         >
                           {t('绑定')}
                         </Button>
@@ -460,7 +483,10 @@ const AccountManagement = ({
               <Modal
                 title={t('绑定 Telegram')}
                 visible={showTelegramBindModal}
-                onCancel={() => setShowTelegramBindModal(false)}
+                onCancel={() => {
+                  setShowTelegramBindModal(false);
+                  setTelegramBindFlowToken('');
+                }}
                 footer={null}
               >
                 <div className='my-3 text-sm text-gray-600'>
@@ -468,10 +494,14 @@ const AccountManagement = ({
                 </div>
                 <div className='flex justify-center'>
                   <div className='scale-90'>
-                    <TelegramLoginButton
-                      dataAuthUrl='/api/oauth/telegram/bind'
-                      botName={status.telegram_bot_name}
-                    />
+                    {telegramBindFlowToken ? (
+                      <TelegramLoginButton
+                        dataAuthUrl={`/api/oauth/telegram/bind/${encodeURIComponent(
+                          telegramBindFlowToken,
+                        )}`}
+                        botName={status.telegram_bot_name}
+                      />
+                    ) : null}
                   </div>
                 </div>
               </Modal>

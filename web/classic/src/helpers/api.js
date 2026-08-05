@@ -246,7 +246,7 @@ export async function getOAuthState() {
   if (affCode && affCode.length > 0) {
     path += `?aff=${affCode}`;
   }
-  const res = await API.get(path);
+  const res = await API.post(path);
   const { success, message, data } = res.data;
   if (success) {
     return data;
