@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
@@ -20,6 +21,7 @@ var channelSyncLock sync.RWMutex
 
 func InitChannelCache() {
 	if !common.MemoryCacheEnabled {
+		InvalidatePricingCache()
 		return
 	}
 	newChannelId2channel := make(map[int]*Channel)
@@ -82,6 +84,10 @@ func InitChannelCache() {
 	}
 	channelsIDM = newChannelId2channel
 	channelSyncLock.Unlock()
+	// Lock ordering: InvalidatePricingCache acquires updatePricingLock. Release
+	// channelSyncLock before invalidating the pricing cache so the two locks are
+	// never held at the same time in reversed order.
+	InvalidatePricingCache()
 	common.SysLog("channels synced from database")
 }
 
@@ -252,14 +258,21 @@ func CacheUpdateChannel(channel *Channel) {
 		return
 	}
 	channelSyncLock.Lock()
-	defer channelSyncLock.Unlock()
 	if channel == nil {
+		channelSyncLock.Unlock()
 		return
 	}
 
-	println("CacheUpdateChannel:", channel.Id, channel.Name, channel.Status, channel.ChannelInfo.MultiKeyPollingIndex)
-
-	println("before:", channelsIDM[channel.Id].ChannelInfo.MultiKeyPollingIndex)
+	if channelsIDM == nil {
+		channelsIDM = make(map[int]*Channel)
+	}
+	if oldChannel, ok := channelsIDM[channel.Id]; ok {
+		logger.LogDebug(nil, "CacheUpdateChannel before: id=%d, name=%s, status=%d, polling_index=%d", channel.Id, channel.Name, channel.Status, oldChannel.ChannelInfo.MultiKeyPollingIndex)
+	}
 	channelsIDM[channel.Id] = channel
-	println("after :", channelsIDM[channel.Id].ChannelInfo.MultiKeyPollingIndex)
+	logger.LogDebug(nil, "CacheUpdateChannel after: id=%d, name=%s, status=%d, polling_index=%d", channel.Id, channel.Name, channel.Status, channel.ChannelInfo.MultiKeyPollingIndex)
+	// Lock ordering: do NOT hold channelSyncLock while calling
+	// InvalidatePricingCache, which acquires updatePricingLock.
+	channelSyncLock.Unlock()
+	InvalidatePricingCache()
 }
