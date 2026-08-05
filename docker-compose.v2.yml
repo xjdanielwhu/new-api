@@ -15,6 +15,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        GOPROXY: https://goproxy.cn,https://proxy.golang.org,direct
     image: new-api-v2:local
     container_name: new-api-v2
     restart: always
