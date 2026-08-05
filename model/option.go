@@ -208,6 +208,9 @@ func validateOptionValue(key string, value string) error {
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
 	}
+	if key == operation_setting.ToolPriceOptionKey {
+		return operation_setting.ValidateToolPricesJSON(value)
+	}
 	return nil
 }
 
@@ -615,7 +618,11 @@ func handleConfigUpdate(key, value string) bool {
 	if configName == "performance_setting" {
 		performance_setting.UpdateAndSync()
 	} else if configName == "tool_price_setting" {
-		operation_setting.RebuildToolPriceIndex()
+		if key == operation_setting.ToolPriceOptionKey {
+			operation_setting.LoadToolPricesFromJSONString(value)
+		} else {
+			operation_setting.RebuildToolPriceIndex()
+		}
 	} else if configName == "billing_setting" {
 		InvalidatePricingCache()
 		ratio_setting.InvalidateExposedDataCache()
