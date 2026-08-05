@@ -119,7 +119,12 @@ func main() {
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
 
-	// Wire task polling adaptor factory (breaks service -> relay import cycle)
+	// 上报本进程为系统实例，供 System Info 页面展示多实例部署下的存活节点
+	service.StartSystemInstanceReporter()
+
+	// Wire task polling adaptor factory (breaks service -> relay import cycle).
+	// 必须在系统任务调度器启动前完成：async_task_poll handler 会调用
+	// service.RunTaskPollingOnce，依赖该工厂已被设置。
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
 		a := relay.GetTaskAdaptor(platform)
 		if a == nil {
@@ -128,17 +133,13 @@ func main() {
 		return a
 	}
 
-	// Channel upstream model update check task
-	controller.StartChannelUpstreamModelUpdateTask()
-
-	if common.IsMasterNode && constant.UpdateTask {
-		gopool.Go(func() {
-			controller.UpdateMidjourneyTaskBulk()
-		})
-		gopool.Go(func() {
-			controller.UpdateTaskBulk()
-		})
-	}
+	// 把上游模型更新检测与异步任务轮询（Midjourney / Suno / 视频）注册为定时系统
+	// 任务，由数据库租约在多个 master 之间去重并留存执行历史，然后启动调度器。
+	// 主节点限定与 UpdateTask 开关分别由 runner 和各 handler 的 Enabled() 保证，
+	// 原先的 StartChannelUpstreamModelUpdateTask / UpdateMidjourneyTaskBulk /
+	// UpdateTaskBulk 三个独立循环已由此接管。
+	controller.RegisterScheduledSystemTasks()
+	service.StartSystemTaskRunner()
 	if os.Getenv("BATCH_UPDATE_ENABLED") == "true" {
 		common.BatchUpdateEnabled = true
 		common.SysLog("batch update enabled with interval " + strconv.Itoa(common.BatchUpdateInterval) + "s")

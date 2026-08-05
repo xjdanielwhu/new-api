@@ -91,8 +91,26 @@ func sweepTimedOutTasks(ctx context.Context) {
 func TaskPollingLoop() {
 	for {
 		time.Sleep(time.Duration(15) * time.Second)
+		RunTaskPollingOnce(context.TODO(), nil)
+	}
+}
+
+// TaskPollingSummary 记录单轮异步任务轮询的执行结果，供系统任务框架上报。
+type TaskPollingSummary struct {
+	Platforms      int `json:"platforms"`
+	Tasks          int `json:"tasks"`
+	FixedNullTasks int `json:"fixed_null_tasks"`
+}
+
+// RunTaskPollingOnce 执行一轮异步任务（Suno / 视频等）轮询。report 可为 nil；
+// 非 nil 时按已处理平台数上报进度，供系统任务框架展示。
+func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) TaskPollingSummary {
+	summary := TaskPollingSummary{}
+	{
 		common.SysLog("任务进度轮询开始")
-		ctx := context.TODO()
+		if ctx == nil {
+			ctx = context.TODO()
+		}
 		sweepTimedOutTasks(ctx)
 		allTasks := model.GetAllUnFinishSyncTasks(constant.TaskQueryLimit)
 		platformTask := make(map[constant.TaskPlatform][]*model.Task)
@@ -124,6 +142,7 @@ func TaskPollingLoop() {
 				if err != nil {
 					logger.LogError(ctx, fmt.Sprintf("Fix null task_id task error: %v", err))
 				} else {
+					summary.FixedNullTasks += len(nullTaskIds)
 					logger.LogInfo(ctx, fmt.Sprintf("Fix null task_id task success: %v", nullTaskIds))
 				}
 			}
@@ -132,9 +151,15 @@ func TaskPollingLoop() {
 			}
 
 			DispatchPlatformUpdate(platform, taskChannelM, taskM)
+			summary.Platforms++
+			summary.Tasks += len(taskM)
+			if report != nil {
+				report(summary.Platforms, len(platformTask))
+			}
 		}
 		common.SysLog("任务进度轮询完成")
 	}
+	return summary
 }
 
 // DispatchPlatformUpdate 按平台分发轮询更新
