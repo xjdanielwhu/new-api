@@ -9,14 +9,13 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -123,7 +122,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	// Adaptors may have already set a more accurate count from the
 	// upstream response; only set the default when they haven't.
 	if info.PriceData.UsePrice { // only price model use N ratio
-		if _, hasN := info.PriceData.OtherRatios["n"]; !hasN {
+		if !info.PriceData.HasOtherRatio("n") {
 			info.PriceData.AddOtherRatio("n", float64(imageN))
 		}
 	}
