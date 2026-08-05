@@ -677,7 +677,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
 
   return (
     <div className='flex flex-col gap-4'>
-      <div className='grid h-[clamp(720px,calc(100vh-12rem),900px)] min-h-0 gap-4 md:grid-cols-[minmax(300px,0.72fr)_minmax(520px,1.28fr)] xl:grid-cols-[minmax(320px,0.68fr)_minmax(640px,1.32fr)]'>
+      <div className='grid h-[clamp(720px,calc(100vh-12rem),900px)] min-h-0 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(420px,0.82fr)] xl:grid-cols-[minmax(0,1.1fr)_minmax(520px,0.9fr)]'>
         <div className='flex min-h-0 min-w-0 flex-col gap-3'>
           <DataTableToolbar
             table={table}
@@ -724,7 +724,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
               table={table}
               containerClassName='min-h-0 flex-1 rounded-md'
               tableContainerClassName='h-full'
-              tableClassName='min-w-[852px] table-fixed'
+              tableClassName='table-fixed'
               tableHeaderClassName='[&_tr]:border-b-0'
               splitHeaderScrollClassName='h-full'
               bodyContainerClassName='[scrollbar-gutter:stable]'
@@ -738,10 +738,10 @@ const ModelRatioVisualEditorComponent = forwardRef<
               colgroup={
                 <colgroup>
                   <col className='w-9' />
-                  <col className='w-[300px]' />
-                  <col className='w-[120px]' />
-                  <col className='w-[300px]' />
-                  <col className='w-auto' />
+                  <col className='w-[34%]' />
+                  <col className='w-[16%]' />
+                  <col className='w-[34%]' />
+                  <col className='w-[72px]' />
                 </colgroup>
               }
               renderRow={(row, { getCellClassName }) => (

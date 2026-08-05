@@ -501,7 +501,7 @@ export const ModelPricingEditorPanel = forwardRef<
           autoComplete='off'
         >
           <div className='min-h-0 flex-1 overflow-y-auto p-4 pb-6'>
-            <div className='grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(220px,260px)]'>
+            <div className='grid items-start gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(220px,260px)]'>
               <FieldGroup>
                 {warnings.length > 0 && (
                   <Alert variant='destructive'>
