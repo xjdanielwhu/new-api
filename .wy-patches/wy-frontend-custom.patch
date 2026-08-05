@@ -1,0 +1,1099 @@
+commit fe8fd1622c9763bc658e29bb46c9cd9f1fbf3a91
+Author: xjdaniel <xjdaniel@aliyun.com>
+Date:   Tue Aug 4 00:06:34 2026 +0800
+
+    feat: release v1.0.0-rc-wy02.22 with multi-model and stability improvements
+    
+    This release includes:
+    - Added context overflow auto recovery feature
+    - Expanded supported model lists for Codex and Zhipu
+    - Fixed SSE stream write concurrency issues
+    - Improved error handling for upstream non-JSON responses
+    - Updated frontend UI styling and i18n translations
+    - Added one-click deployment docker-compose config
+    - Added ICRA/MPS public security and ICP filing info
+    - Optimized Claude channel for text file and image handling
+
+diff --git a/web/default/bun.lock b/web/default/bun.lock
+index f9dc0300..bf4639e6 100644
+--- a/web/default/bun.lock
++++ b/web/default/bun.lock
+@@ -1,5 +1,6 @@
+ {
+   "lockfileVersion": 1,
++  "configVersion": 0,
+   "workspaces": {
+     "": {
+       "name": "newapi-web",
+diff --git a/web/default/index.html b/web/default/index.html
+index ed041d27..c7242452 100644
+--- a/web/default/index.html
++++ b/web/default/index.html
+@@ -14,6 +14,14 @@
+     />
+ 
+     <meta name="theme-color" content="#fff" />
++
++    <!-- Fonts -->
++    <link rel="preconnect" href="https://fonts.googleapis.com" />
++    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
++    <link
++      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Public+Sans:wght@300;400;500;600;700&display=swap"
++      rel="stylesheet"
++    />
+   </head>
+ 
+   <body>
+diff --git a/web/default/public/cc-switch-icon.ico b/web/default/public/cc-switch-icon.ico
+new file mode 100644
+index 00000000..fee91f1d
+Binary files /dev/null and b/web/default/public/cc-switch-icon.ico differ
+diff --git a/web/default/public/cherry-studio-icon.png b/web/default/public/cherry-studio-icon.png
+new file mode 100644
+index 00000000..f0c37c60
+Binary files /dev/null and b/web/default/public/cherry-studio-icon.png differ
+diff --git a/web/default/src/components/layout/components/footer.tsx b/web/default/src/components/layout/components/footer.tsx
+index b74da94b..aef80c42 100644
+--- a/web/default/src/components/layout/components/footer.tsx
++++ b/web/default/src/components/layout/components/footer.tsx
+@@ -222,6 +222,14 @@ export function Footer(props: FooterProps) {
+           <p className='text-muted-foreground/40 text-xs'>
+             &copy; {currentYear} {displayName}.{' '}
+             {props.copyright ?? t('footer.defaultCopyright')}
++            <span className='mx-2'>|</span>
++            <a href='https://beian.miit.gov.cn/' rel='nofollow' target='_blank' className='hover:text-muted-foreground/60 transition-colors'>
++              粤ICP备2025497226号-2
++            </a>
++            <span className='mx-2'>|</span>
++            <a href='https://beian.mps.gov.cn/#/query/webSearch?code=44011302005707' rel='noreferrer' target='_blank' className='hover:text-muted-foreground/60 transition-colors'>
++              粤公网安备44011302005707号
++            </a>
+           </p>
+           <ProjectAttribution currentYear={currentYear} />
+         </div>
+diff --git a/web/default/src/features/channels/lib/channel-utils.ts b/web/default/src/features/channels/lib/channel-utils.ts
+index 9d96b62e..c1c68f8a 100644
+--- a/web/default/src/features/channels/lib/channel-utils.ts
++++ b/web/default/src/features/channels/lib/channel-utils.ts
+@@ -51,7 +51,7 @@ export function getChannelTypeIcon(type: number): string {
+     15: 'Baidu', // Baidu
+     46: 'Baidu', // Baidu V2
+     16: 'Zhipu', // Zhipu
+-    26: 'Zhipu', // Zhipu V4
++    26: 'Zhipu V4', // Zhipu V4
+     17: 'Qwen', // Ali
+     18: 'Spark', // Xunfei
+     23: 'Hunyuan', // Tencent
+diff --git a/web/default/src/features/home/components/app-support-badge.tsx b/web/default/src/features/home/components/app-support-badge.tsx
+new file mode 100644
+index 00000000..b99dc382
+--- /dev/null
++++ b/web/default/src/features/home/components/app-support-badge.tsx
+@@ -0,0 +1,47 @@
++import { useSystemConfigStore } from '@/stores/system-config-store'
++import { useTranslation } from 'react-i18next'
++
++interface AppSupportBadgeProps {
++  className?: string
++}
++
++export function AppSupportBadge(props: AppSupportBadgeProps) {
++  const { t } = useTranslation()
++  const { config } = useSystemConfigStore()
++
++  const chats = (config as unknown as { chats?: Array<Record<string, string>> }).chats || []
++  
++  const displayApps = chats.slice(0, 4)
++
++  return (
++    <div className={`mt-8 ${props.className || ''}`}>
++      <div className='flex items-center gap-2 mb-4'>
++        <span className='inline-flex items-center gap-1.5 rounded-full bg-blue-500/10 px-2.5 py-1 text-xs font-medium text-blue-600 dark:bg-blue-400/10 dark:text-blue-400'>
++          <span className='relative flex h-1.5 w-1.5'>
++            <span className='animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75'></span>
++            <span className='relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500'></span>
++          </span>
++          {t('AI Application Support')}
++        </span>
++      </div>
++      <div className='flex flex-wrap items-center gap-2'>
++        {displayApps.map((app, index) => {
++          const name = Object.keys(app)[0]
++          return (
++            <span
++              key={index}
++              className='rounded-lg border border-border/40 px-3 py-1.5 text-xs font-medium text-foreground/70 transition-colors hover:bg-muted/50 hover:text-foreground'
++            >
++              {name}
++            </span>
++          )
++        })}
++        {chats.length > 4 && (
++          <span className='rounded-lg border border-border/40 px-3 py-1.5 text-xs font-medium text-foreground/50'>
++            +{chats.length - 4} {t('more')}
++          </span>
++        )}
++      </div>
++    </div>
++  )
++}
+diff --git a/web/default/src/features/home/components/hero-terminal-demo.tsx b/web/default/src/features/home/components/hero-terminal-demo.tsx
+index 1ff3a533..37c3a2df 100644
+--- a/web/default/src/features/home/components/hero-terminal-demo.tsx
++++ b/web/default/src/features/home/components/hero-terminal-demo.tsx
+@@ -184,12 +184,11 @@ export function HeroTerminalDemo() {
+   const accent = ACCENT_CLASSES[demo.accent]
+ 
+   return (
+-    <div className='mx-auto mt-16 w-full max-w-2xl'>
++    <div className='mx-auto w-full max-w-2xl mt-8 md:mt-0'>
+       <div
+         className={cn(
+-          'overflow-hidden rounded-2xl border backdrop-blur-sm',
+-          'border-border/60 bg-white/95 shadow-[0_20px_50px_-25px_rgba(15,23,42,0.18)]',
+-          'dark:border-white/[0.06] dark:bg-[#0b0f17]/95 dark:shadow-[0_20px_60px_-25px_rgba(0,0,0,0.7)]'
++          'overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_20px_60px_-30px_rgba(15,23,42,0.18)]',
++          'dark:border-slate-700 dark:bg-[#0b0f17] dark:shadow-[0_20px_60px_-25px_rgba(0,0,0,0.7)]'
+         )}
+       >
+         {/* Tab strip */}
+diff --git a/web/default/src/features/home/components/sections/cta.tsx b/web/default/src/features/home/components/sections/cta.tsx
+index f14510c1..f04c8c04 100644
+--- a/web/default/src/features/home/components/sections/cta.tsx
++++ b/web/default/src/features/home/components/sections/cta.tsx
+@@ -17,49 +17,50 @@ export function CTA(props: CTAProps) {
+   }
+ 
+   return (
+-    <section className='relative z-10 overflow-hidden px-6 py-24 md:py-32'>
+-      {/* Gradient mesh background */}
++    <section className='relative z-10 overflow-hidden px-6 py-28 md:py-36'>
+       <div
+         aria-hidden
+-        className='absolute inset-0 -z-10 opacity-20 dark:opacity-[0.08]'
++        className='pointer-events-none absolute inset-0 -z-10'
+         style={{
+-          background: [
+-            'radial-gradient(ellipse 50% 50% at 30% 50%, oklch(0.7 0.15 250 / 70%) 0%, transparent 70%)',
+-            'radial-gradient(ellipse 40% 40% at 70% 40%, oklch(0.65 0.12 200 / 50%) 0%, transparent 70%)',
+-          ].join(', '),
++          background:
++            'radial-gradient(ellipse 60% 50% at 30% 50%, rgba(219, 234, 254, 0.5) 0%, transparent 70%), radial-gradient(ellipse 50% 40% at 70% 40%, rgba(167, 139, 250, 0.25) 0%, transparent 70%)',
+         }}
+       />
+ 
+-      <AnimateInView
+-        className='mx-auto max-w-2xl text-center'
+-        animation='scale-in'
+-      >
+-        <h2 className='text-2xl leading-tight font-bold tracking-tight md:text-4xl'>
+-          {t('Ready to simplify')}
+-          <br />
+-          <span className='bg-gradient-to-r from-blue-400 via-violet-400 to-purple-500 bg-clip-text text-transparent'>
+-            {t('your AI integration?')}
+-          </span>
+-        </h2>
+-        <p className='text-muted-foreground/80 mx-auto mt-5 max-w-md text-sm leading-relaxed md:text-base'>
+-          {t(
+-            'Deploy your own gateway and start routing requests through your configured upstream services.'
+-          )}
+-        </p>
+-        <div className='mt-8 flex items-center justify-center gap-3'>
+-          <Button className='group rounded-lg' render={<Link to='/sign-up' />}>
+-            {t('Get Started')}
+-            <ArrowRight className='ml-1 size-3.5 transition-transform duration-200 group-hover:translate-x-0.5' />
+-          </Button>
+-          <Button
+-            variant='outline'
+-            className='border-border/50 hover:border-border hover:bg-muted/50 rounded-lg'
+-            render={<Link to='/pricing' />}
+-          >
+-            {t('View Pricing')}
+-          </Button>
+-        </div>
+-      </AnimateInView>
++      <div className='mx-auto w-full max-w-6xl'>
++        <AnimateInView className='text-center' animation='scale-in'>
++          <h2 className='text-2xl leading-tight font-bold tracking-tight md:text-3xl'>
++            {t('Ready to simplify')}
++            <br />
++            <span className='bg-gradient-to-r from-blue-500 via-violet-500 to-purple-500 bg-clip-text text-transparent'>
++              {t('your AI integration?')}
++            </span>
++          </h2>
++          <p className='mx-auto mt-5 max-w-xl text-base leading-relaxed text-muted-foreground/80 md:text-[15px]'>
++            {t(
++              'Deploy your own gateway and start routing requests through your configured upstream services.'
++            )}
++          </p>
++          <div className='mt-8 flex flex-wrap items-center justify-center gap-3'>
++            <Button
++              size='lg'
++              className='group h-11 rounded-[1rem] px-5 text-sm font-medium'
++              render={<Link to='/sign-up' />}
++            >
++              {t('Get Started')}
++              <ArrowRight className='ml-2 size-4 transition-transform duration-200 group-hover:translate-x-1' />
++            </Button>
++            <Button
++              size='lg'
++              variant='outline'
++              className='h-11 rounded-[1rem] border-border/50 bg-background px-5 text-sm font-medium hover:bg-muted/50'
++              render={<Link to='/pricing' />}
++            >
++              {t('View Pricing')}
++            </Button>
++          </div>
++        </AnimateInView>
++      </div>
+     </section>
+   )
+ }
+diff --git a/web/default/src/features/home/components/sections/features.tsx b/web/default/src/features/home/components/sections/features.tsx
+index c25ec91d..e1dabccc 100644
+--- a/web/default/src/features/home/components/sections/features.tsx
++++ b/web/default/src/features/home/components/sections/features.tsx
+@@ -1,7 +1,5 @@
+ import {
+-  Zap,
+   Shield,
+-  Globe,
+   Code,
+   Gauge,
+   DollarSign,
+@@ -27,14 +25,13 @@ export function Features(_props: FeaturesProps) {
+         'Optimized network architecture ensures millisecond response times'
+       ),
+       span: 'md:col-span-2',
+-      icon: <Zap className='size-4 text-blue-400' />,
+       visual: (
+-        <div className='mt-4 grid grid-cols-3 gap-2'>
++        <div className='mt-5 grid grid-cols-3 gap-2'>
+           {['OpenAI', 'Claude', 'Gemini', 'DeepSeek', 'Qwen', 'Llama'].map(
+             (name) => (
+               <div
+                 key={name}
+-                className='border-border/30 bg-muted/20 text-muted-foreground flex items-center justify-center rounded-lg border px-3 py-2 text-xs transition-colors duration-300 hover:border-blue-500/30 hover:bg-blue-500/5'
++                className='flex items-center justify-center rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-xs font-medium text-muted-foreground transition-colors duration-300 hover:border-blue-300 hover:bg-blue-50/50 dark:hover:border-blue-700 dark:hover:bg-blue-900/20'
+               >
+                 {name}
+               </div>
+@@ -51,19 +48,18 @@ export function Features(_props: FeaturesProps) {
+         'Enterprise-grade security with comprehensive permission management'
+       ),
+       span: 'md:col-span-1',
+-      icon: <Shield className='size-4 text-emerald-400' />,
+       visual: (
+-        <div className='mt-4 flex items-center justify-center'>
++        <div className='mt-6 flex items-center justify-center'>
+           <div className='relative'>
+-            <div className='flex size-16 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/5'>
++            <div className='flex size-16 items-center justify-center rounded-2xl border border-emerald-200 bg-emerald-50/50 dark:border-emerald-800 dark:bg-emerald-900/20'>
+               <Shield
+-                className='size-7 text-emerald-500/70'
++                className='size-7 text-emerald-500'
+                 strokeWidth={1.5}
+               />
+             </div>
+-            <div className='absolute -top-1 -right-1 flex size-4 items-center justify-center rounded-full bg-emerald-500'>
++            <div className='absolute -top-1 -right-1 flex size-5 items-center justify-center rounded-full bg-emerald-500'>
+               <svg
+-                className='size-2.5 text-white'
++                className='size-3 text-white'
+                 fill='none'
+                 viewBox='0 0 24 24'
+                 stroke='currentColor'
+@@ -86,23 +82,22 @@ export function Features(_props: FeaturesProps) {
+       title: t('Global Coverage'),
+       desc: t('Multi-region deployment for stable global access'),
+       span: 'md:col-span-1',
+-      icon: <Globe className='size-4 text-violet-400' />,
+       visual: (
+-        <div className='mt-4 space-y-2'>
++        <div className='mt-5 space-y-2.5'>
+           {[t('Load Balancing'), t('Rate Limiting'), t('Cost Tracking')].map(
+             (step, i) => (
+               <div key={step} className='flex items-center gap-2'>
+                 <div
+                   className={`flex size-6 items-center justify-center rounded-full text-[10px] font-bold ${
+                     i === 1
+-                      ? 'border border-blue-500/30 bg-blue-500/20 text-blue-500'
+-                      : 'border-border/40 bg-muted text-muted-foreground border'
++                      ? 'border border-blue-300 bg-blue-50 text-blue-600 dark:border-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
++                      : 'border border-border/50 bg-background text-muted-foreground'
+                   }`}
+                 >
+                   {i + 1}
+                 </div>
+-                <div className='bg-border/40 h-px flex-1' />
+-                <span className='text-muted-foreground text-xs'>{step}</span>
++                <div className='h-px flex-1 bg-border/60' />
++                <span className='text-xs text-muted-foreground'>{step}</span>
+               </div>
+             )
+           )}
+@@ -115,20 +110,19 @@ export function Features(_props: FeaturesProps) {
+       title: t('Developer Friendly'),
+       desc: t('Compatible API routes for common AI application workflows'),
+       span: 'md:col-span-2',
+-      icon: <Code className='size-4 text-amber-400' />,
+       visual: (
+-        <div className='mt-4 flex items-center gap-3'>
++        <div className='mt-5 flex items-center gap-4'>
+           <div className='flex -space-x-2'>
+             {['API', 'SDK', 'CLI', 'Docs'].map((n) => (
+               <div
+                 key={n}
+-                className='border-background from-muted to-muted/60 text-muted-foreground flex size-8 items-center justify-center rounded-full border-2 bg-gradient-to-br text-[9px] font-bold'
++                className='flex size-9 items-center justify-center rounded-full border-2 border-background bg-gradient-to-br from-muted/70 to-muted/30 text-[9px] font-bold text-muted-foreground'
+               >
+                 {n}
+               </div>
+             ))}
+           </div>
+-          <div className='text-muted-foreground flex items-center gap-1.5 text-xs'>
++          <div className='flex items-center gap-1.5 text-xs text-muted-foreground'>
+             <Code className='size-3.5 text-blue-500' />
+             {t('Multi-protocol Compatible')}
+           </div>
+@@ -138,6 +132,11 @@ export function Features(_props: FeaturesProps) {
+   ]
+ 
+   const additionalFeatures = [
++    {
++      icon: <Code className='size-5' strokeWidth={1.5} />,
++      title: t('Multi-protocol Compatible'),
++      desc: t('Compatible API routes for common AI application workflows'),
++    },
+     {
+       icon: <Gauge className='size-5' strokeWidth={1.5} />,
+       title: t('High Performance'),
+@@ -163,7 +162,7 @@ export function Features(_props: FeaturesProps) {
+   return (
+     <section className='relative z-10 px-6 py-24 md:py-32'>
+       <div className='mx-auto max-w-6xl'>
+-        <AnimateInView className='mb-16 max-w-lg'>
++        <AnimateInView className='mb-14 max-w-lg'>
+           <p className='text-muted-foreground mb-3 text-xs font-medium tracking-widest uppercase'>
+             {t('Core Features')}
+           </p>
+@@ -174,22 +173,21 @@ export function Features(_props: FeaturesProps) {
+           </h2>
+         </AnimateInView>
+ 
+-        {/* Bento grid */}
+-        <div className='border-border/40 bg-border/40 grid gap-px overflow-hidden rounded-xl border md:grid-cols-3'>
++        <div className='grid gap-4 md:grid-cols-3'>
+           {features.map((f, i) => (
+             <AnimateInView
+               key={f.id}
+               delay={i * 100}
+               animation='scale-in'
+-              className={`bg-background group hover:bg-muted/20 p-7 transition-colors duration-300 md:p-8 ${f.span}`}
++              className={`group rounded-2xl border border-border/50 bg-background p-7 transition-all duration-300 hover:border-border hover:shadow-sm ${f.span}`}
+             >
+-              <div className='mb-3 flex items-center gap-3'>
+-                <span className='border-border/40 bg-muted text-muted-foreground flex size-7 items-center justify-center rounded-md border text-[10px] font-semibold tabular-nums'>
++              <div className='mb-4 flex items-center gap-3'>
++                <span className='flex size-7 items-center justify-center rounded-lg border border-border/50 bg-muted/30 text-[10px] font-bold text-muted-foreground'>
+                   {f.num}
+                 </span>
+                 <h3 className='text-sm font-semibold'>{f.title}</h3>
+               </div>
+-              <p className='text-muted-foreground text-sm leading-relaxed'>
++              <p className='text-sm leading-relaxed text-muted-foreground'>
+                 {f.desc}
+               </p>
+               {f.visual}
+@@ -197,8 +195,7 @@ export function Features(_props: FeaturesProps) {
+           ))}
+         </div>
+ 
+-        {/* Additional features row */}
+-        <div className='mt-12 grid grid-cols-2 gap-8 md:grid-cols-4 md:gap-12'>
++        <div className='mt-12 grid grid-cols-2 gap-6 md:grid-cols-5 md:gap-8'>
+           {additionalFeatures.map((f, i) => (
+             <AnimateInView
+               key={f.title}
+@@ -206,11 +203,11 @@ export function Features(_props: FeaturesProps) {
+               animation='fade-up'
+               className='flex flex-col items-center text-center'
+             >
+-              <div className='text-muted-foreground border-border/50 bg-muted/30 group-hover:text-foreground mb-3 flex size-12 items-center justify-center rounded-xl border transition-colors'>
++              <div className='mb-3 flex size-12 items-center justify-center rounded-xl border border-border/50 bg-muted/30 text-muted-foreground transition-all group-hover:border-blue-300 group-hover:bg-blue-50 group-hover:text-blue-600 dark:group-hover:border-blue-700 dark:group-hover:bg-blue-900/20 dark:group-hover:text-blue-400'>
+                 {f.icon}
+               </div>
+               <h3 className='mb-1.5 text-sm font-semibold'>{f.title}</h3>
+-              <p className='text-muted-foreground max-w-[200px] text-xs leading-relaxed'>
++              <p className='max-w-[200px] text-xs leading-relaxed text-muted-foreground'>
+                 {f.desc}
+               </p>
+             </AnimateInView>
+diff --git a/web/default/src/features/home/components/sections/hero.tsx b/web/default/src/features/home/components/sections/hero.tsx
+index 6187af27..71893019 100644
+--- a/web/default/src/features/home/components/sections/hero.tsx
++++ b/web/default/src/features/home/components/sections/hero.tsx
+@@ -1,7 +1,6 @@
+ import { Link } from '@tanstack/react-router'
+-import { ArrowRight } from 'lucide-react'
++import { ArrowRight, BookOpen } from 'lucide-react'
+ import { useTranslation } from 'react-i18next'
+-import { useSystemConfig } from '@/hooks/use-system-config'
+ import { Button } from '@/components/ui/button'
+ import { HeroTerminalDemo } from '../hero-terminal-demo'
+ 
+@@ -10,88 +9,149 @@ interface HeroProps {
+   isAuthenticated?: boolean
+ }
+ 
++function MoreIcon() {
++  return (
++    <svg viewBox='0 0 24 24' className='size-4' fill='currentColor'>
++      <circle cx='5' cy='12' r='2' />
++      <circle cx='12' cy='12' r='2' />
++      <circle cx='19' cy='12' r='2' />
++    </svg>
++  )
++}
++
+ export function Hero(props: HeroProps) {
+   const { t } = useTranslation()
+-  const { systemName } = useSystemConfig()
+ 
+   return (
+-    <section className='relative z-10 flex flex-col items-center overflow-hidden px-6 pt-28 pb-16 md:pt-36 md:pb-24'>
+-      {/* Radial gradient background */}
++    <section className='relative z-10 flex flex-col items-center overflow-hidden px-6 pt-24 pb-16 md:pt-32 md:pb-24 lg:pt-36 lg:pb-28'>
++      {/* Colorful ambient blobs */}
+       <div
+         aria-hidden
+         className='pointer-events-none absolute inset-0 -z-10 opacity-25 dark:opacity-[0.12]'
+         style={{
+-          background: [
+-            'radial-gradient(ellipse 60% 50% at 20% 20%, oklch(0.72 0.18 250 / 80%) 0%, transparent 70%)',
+-            'radial-gradient(ellipse 50% 40% at 80% 15%, oklch(0.65 0.15 200 / 60%) 0%, transparent 70%)',
+-            'radial-gradient(ellipse 40% 35% at 40% 80%, oklch(0.70 0.12 280 / 40%) 0%, transparent 70%)',
+-          ].join(', '),
++          background:
++            'radial-gradient(60% 50% at 20% 20%, oklch(0.72 0.18 250 / 0.8) 0%, rgba(0, 0, 0, 0) 70%), radial-gradient(50% 40% at 80% 15%, oklch(0.65 0.15 200 / 0.6) 0%, rgba(0, 0, 0, 0) 70%), radial-gradient(40% 35% at 40% 80%, oklch(0.7 0.12 280 / 0.4) 0%, rgba(0, 0, 0, 0) 70%)',
+         }}
+       />
+-      {/* Grid pattern */}
++
++      {/* Subtle grid overlay */}
+       <div
+         aria-hidden
+-        className='absolute inset-0 -z-10 bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_30%,black_20%,transparent_100%)] bg-[size:4rem_4rem] opacity-[0.08]'
++        className='absolute inset-0 -z-10 bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] bg-[size:4rem_4rem] opacity-[0.08] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_30%,black_20%,transparent_100%)]'
+       />
+ 
+-      <div className='flex max-w-3xl flex-col items-center text-center'>
+-        <h1
+-          className='landing-animate-fade-up text-[clamp(2rem,5.5vw,3.5rem)] leading-[1.15] font-bold tracking-tight'
+-          style={{ animationDelay: '0ms' }}
+-        >
+-          {t('Unified API Gateway for')}
+-          <br />
+-          <span className='bg-gradient-to-r from-blue-400 via-violet-400 to-purple-500 bg-clip-text text-transparent'>
+-            {t('All Your AI Models')}
+-          </span>
+-        </h1>
+-        <p
+-          className='landing-animate-fade-up text-muted-foreground/80 mt-5 max-w-lg text-base leading-relaxed opacity-0 md:text-lg'
+-          style={{ animationDelay: '80ms' }}
+-        >
+-          {systemName}{' '}
+-          {t(
+-            'is an open-source AI API gateway for self-hosted deployments. Connect multiple upstream services, manage models, keys, quotas, logs, and routing policies in one place.'
+-          )}
+-        </p>
+-        <div
+-          className='landing-animate-fade-up mt-8 flex items-center gap-3 opacity-0'
+-          style={{ animationDelay: '160ms' }}
+-        >
+-          {props.isAuthenticated ? (
+-            <Button
+-              className='group rounded-lg'
+-              render={<Link to='/dashboard' />}
+-            >
+-              {t('Go to Dashboard')}
+-              <ArrowRight className='ml-1 size-3.5 transition-transform duration-200 group-hover:translate-x-0.5' />
+-            </Button>
+-          ) : (
+-            <>
++      <div className='mx-auto grid w-full max-w-6xl grid-cols-1 items-start gap-12 md:grid-cols-2 md:gap-8'>
++        <div className='flex w-full min-w-0 flex-col items-center text-center md:items-start md:text-left'>
++          <div className='landing-animate-fade-up mb-5 inline-flex items-center gap-1.5 rounded-full border border-blue-500/20 bg-blue-500/5 px-3 py-1.5 text-[11px] font-medium text-blue-600 shadow-xs dark:border-blue-400/20 dark:bg-blue-400/5 dark:text-blue-400'>
++            <span className='relative flex h-2 w-2'>
++              <span className='animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75'></span>
++              <span className='relative inline-flex rounded-full h-2 w-2 bg-blue-500'></span>
++            </span>
++            {t('AI Application Infrastructure Foundation')}
++          </div>
++
++          <h1 className='text-[clamp(2.25rem,4.5vw,3.25rem)] leading-[1.15] font-bold tracking-tight text-foreground'>
++            <span>{t('Unified API Gateway for')}</span>
++            <br />
++            <span className='bg-gradient-to-r from-blue-500 via-violet-500 to-purple-500 bg-clip-text text-transparent'>
++              {t('Massive AI Models')}
++            </span>
++          </h1>
++
++          <p className='mt-5 max-w-xl text-base leading-relaxed text-muted-foreground/80 md:text-[15px]'>
++            {t(
++              'Connect to massive models through unified, standard interface protocols. Power AI applications, manage digital assets efficiently, and connect to the future.'
++            )}
++          </p>
++
++          <div className='mt-8 flex flex-wrap items-center justify-center gap-3 md:justify-start'>
++            {props.isAuthenticated ? (
+               <Button
+-                className='group rounded-lg'
+-                render={<Link to='/sign-up' />}
++                size='lg'
++                className='group h-11 rounded-[1rem] px-5 text-sm font-medium'
++                render={<Link to='/dashboard' />}
+               >
+-                {t('Get Started')}
+-                <ArrowRight className='ml-1 size-3.5 transition-transform duration-200 group-hover:translate-x-0.5' />
++                {t('Go to Dashboard')}
++                <ArrowRight className='ml-2 size-4 transition-transform duration-200 group-hover:translate-x-1' />
+               </Button>
+-              <Button
+-                variant='outline'
+-                className='border-border/50 hover:border-border hover:bg-muted/50 rounded-lg'
+-                render={<Link to='/pricing' />}
++            ) : (
++              <>
++                <Button
++                  size='lg'
++                  className='group h-11 rounded-[1rem] px-5 text-sm font-medium'
++                  render={<Link to='/sign-up' />}
++                >
++                  {t('Get Started')}
++                  <ArrowRight className='ml-2 size-4 transition-transform duration-200 group-hover:translate-x-1' />
++                </Button>
++                <Button
++                  size='lg'
++                  variant='outline'
++                  className='h-11 rounded-[1rem] border-border/50 bg-background px-5 text-sm font-medium hover:bg-muted/50'
++                  render={<Link to='/pricing' />}
++                >
++                  {t('View Pricing')}
++                </Button>
++                <a
++                  href='https://coai-api.apifox.cn/'
++                  target='_blank'
++                  rel='noopener noreferrer'
++                  className='inline-flex h-11 items-center justify-center gap-2 rounded-[1rem] border border-border/50 bg-background px-5 text-sm font-medium transition-colors hover:bg-muted/50'
++                >
++                  <BookOpen className='size-4' />
++                  {t('Documentation')}
++                </a>
++              </>
++            )}
++          </div>
++
++          <div className='mt-10 w-full max-w-xl'>
++            <div className='mb-4 flex flex-col gap-1'>
++              <span className='text-[10px] font-bold tracking-[0.15em] uppercase text-muted-foreground/50'>
++                {t('Common App Support')}
++              </span>
++              <p className='text-xs leading-relaxed text-muted-foreground/60'>
++                {t('Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration')}
++              </p>
++            </div>
++            <div className='flex flex-wrap items-center justify-center gap-3 md:justify-start'>
++              <a
++                href='https://cherry-ai.com/'
++                target='_blank'
++                rel='noopener noreferrer'
++                className='group flex items-center gap-3 rounded-full border border-border/40 bg-muted/15 px-5 py-2.5 text-sm font-medium text-foreground/80 shadow-[0_1px_2.5px_rgba(0,0,0,0.01)] backdrop-blur-xs transition-all duration-300 hover:scale-[1.02] hover:border-border hover:bg-muted/30 hover:text-foreground'
+               >
+-                {t('View Pricing')}
+-              </Button>
+-            </>
+-          )}
++                <img
++                  src='/cherry-studio-icon.png'
++                  alt='Cherry Studio'
++                  className='size-5 rounded-md object-contain'
++                />
++                Cherry Studio
++              </a>
++              <a
++                href='https://ccswitch.io/'
++                target='_blank'
++                rel='noopener noreferrer'
++                className='group flex items-center gap-3 rounded-full border border-border/40 bg-muted/15 px-5 py-2.5 text-sm font-medium text-foreground/80 shadow-[0_1px_2.5px_rgba(0,0,0,0.01)] backdrop-blur-xs transition-all duration-300 hover:scale-[1.02] hover:border-border hover:bg-muted/30 hover:text-foreground'
++              >
++                <img
++                  src='/cc-switch-icon.ico'
++                  alt='CC Switch'
++                  className='size-5 rounded-md object-contain'
++                />
++                CC Switch
++              </a>
++              <button className='group flex cursor-default items-center gap-2.5 rounded-full border border-border/40 bg-muted/15 px-5 py-2.5 text-sm font-medium text-foreground/55 shadow-[0_1px_2.5px_rgba(0,0,0,0.01)] backdrop-blur-xs transition-all duration-300 hover:scale-[1.02] hover:border-border hover:bg-muted/30 hover:text-foreground'>
++                <MoreIcon />
++                {t('More')}
++              </button>
++            </div>
++          </div>
+         </div>
+-      </div>
+ 
+-      <div
+-        className='landing-animate-fade-up w-full opacity-0'
+-        style={{ animationDelay: '300ms' }}
+-      >
+-        <HeroTerminalDemo />
++        <div className='flex w-full min-w-0 justify-center'>
++          <HeroTerminalDemo />
++        </div>
+       </div>
+     </section>
+   )
+diff --git a/web/default/src/features/home/components/sections/how-it-works.tsx b/web/default/src/features/home/components/sections/how-it-works.tsx
+index 9a924235..a14c9d73 100644
+--- a/web/default/src/features/home/components/sections/how-it-works.tsx
++++ b/web/default/src/features/home/components/sections/how-it-works.tsx
+@@ -51,10 +51,10 @@ export function HowItWorks() {
+               className='relative flex flex-col items-center text-center'
+             >
+               <div className='relative mb-6'>
+-                <div className='text-muted-foreground border-border/50 bg-muted/30 flex size-16 items-center justify-center rounded-2xl border transition-colors'>
++                <div className='flex size-16 items-center justify-center rounded-2xl border border-border/50 bg-background text-muted-foreground shadow-sm transition-all'>
+                   {step.icon}
+                 </div>
+-                <div className='bg-foreground text-background absolute -top-2 -right-2 flex size-6 items-center justify-center rounded-full text-xs font-bold'>
++                <div className='absolute -top-2 -right-2 flex size-6 items-center justify-center rounded-full bg-blue-500 text-xs font-bold text-white'>
+                   {step.num}
+                 </div>
+               </div>
+diff --git a/web/default/src/features/home/components/sections/stats.tsx b/web/default/src/features/home/components/sections/stats.tsx
+index 9adfe36e..9478a1b0 100644
+--- a/web/default/src/features/home/components/sections/stats.tsx
++++ b/web/default/src/features/home/components/sections/stats.tsx
+@@ -87,18 +87,18 @@ export function Stats(_props: StatsProps) {
+   ]
+ 
+   return (
+-    <div className='border-border/40 bg-muted/10 relative z-10 border-y'>
+-      <div className='mx-auto max-w-6xl px-6 py-10 md:py-12'>
+-        <div className='grid grid-cols-2 gap-8 md:grid-cols-4 md:gap-12'>
++    <div className='relative z-10 border-y border-border/40 bg-muted/20'>
++      <div className='mx-auto max-w-6xl px-6 py-12 md:py-16'>
++        <div className='grid grid-cols-2 gap-8 md:grid-cols-4 md:gap-16'>
+           {stats.map((s) => (
+             <div
+               key={s.label}
+               className='flex flex-col items-center text-center'
+             >
+-              <span className='text-2xl font-bold tracking-tight md:text-3xl'>
++              <span className='text-3xl font-bold tracking-tight text-foreground md:text-4xl'>
+                 <Counter end={s.end} suffix={s.suffix} decimals={s.decimals} />
+               </span>
+-              <span className='text-muted-foreground mt-1.5 text-xs'>
++              <span className='mt-2 text-xs font-medium tracking-wide text-muted-foreground'>
+                 {s.label}
+               </span>
+             </div>
+diff --git a/web/default/src/features/models/components/description-cell.tsx b/web/default/src/features/models/components/description-cell.tsx
+index 9153a8f6..8f9768ae 100644
+--- a/web/default/src/features/models/components/description-cell.tsx
++++ b/web/default/src/features/models/components/description-cell.tsx
+@@ -26,9 +26,11 @@ export function DescriptionCell({
+       <Button
+         variant='link'
+         onClick={handleClick}
+-        className='text-muted-foreground hover:text-foreground block h-auto w-full cursor-pointer overflow-hidden p-0 text-left text-sm text-ellipsis whitespace-nowrap no-underline'
++        className='text-muted-foreground hover:text-foreground block h-auto w-full cursor-pointer overflow-hidden p-0 text-left text-sm no-underline'
+       >
+-        {description}
++        <span className='block line-clamp-2 whitespace-pre-wrap break-words text-left'>
++          {description}
++        </span>
+       </Button>
+     </div>
+   )
+diff --git a/web/default/src/features/pricing/components/model-card.tsx b/web/default/src/features/pricing/components/model-card.tsx
+index b5c64300..242e5903 100644
+--- a/web/default/src/features/pricing/components/model-card.tsx
++++ b/web/default/src/features/pricing/components/model-card.tsx
+@@ -205,7 +205,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
+       </div>
+ 
+       {/* Description */}
+-      <p className='text-muted-foreground mt-2 line-clamp-1 flex-1 text-[13px] leading-relaxed sm:mt-4 sm:line-clamp-2 sm:min-h-[2.5rem]'>
++      <p className='text-muted-foreground mt-2 line-clamp-3 flex-1 whitespace-pre-line text-[13px] leading-relaxed sm:mt-4 sm:min-h-[3.75rem]'>
+         {props.model.description || t('No description available.')}
+       </p>
+ 
+diff --git a/web/default/src/features/pricing/components/model-details.tsx b/web/default/src/features/pricing/components/model-details.tsx
+index 054eed35..6844dc34 100644
+--- a/web/default/src/features/pricing/components/model-details.tsx
++++ b/web/default/src/features/pricing/components/model-details.tsx
+@@ -297,7 +297,7 @@ function ModelHeader(props: { model: PricingModel }) {
+         )}
+       </div>
+       {description && (
+-        <p className='text-muted-foreground mt-2 text-sm leading-relaxed'>
++        <p className='text-muted-foreground mt-2 whitespace-pre-wrap text-sm leading-relaxed'>
+           {description}
+         </p>
+       )}
+diff --git a/web/default/src/i18n/locales/en.json b/web/default/src/i18n/locales/en.json
+index 413d70f8..d5faaa62 100644
+--- a/web/default/src/i18n/locales/en.json
++++ b/web/default/src/i18n/locales/en.json
+@@ -230,6 +230,7 @@
+     "aggregates 50+ AI providers behind one unified API. Manage access, track costs, and scale effortlessly.": "aggregates 50+ AI providers behind one unified API. Manage access, track costs, and scale effortlessly.",
+     "Aggregation bucket": "Aggregation bucket",
+     "AGPL v3.0 License": "AGPL v3.0 License",
++    "AI Application Infrastructure Foundation": "AI Application Infrastructure Foundation",
+     "AI model testing environment": "AI model testing environment",
+     "AI models": "AI models",
+     "AI models supported": "AI models supported",
+@@ -768,6 +769,7 @@
+     "Common Keys": "Common Keys",
+     "Common Logs": "Common Logs",
+     "Common ports include 25, 465, and 587": "Common ports include 25, 465, and 587",
++    "Common App Support": "Common App Support",
+     "Common User": "Common User",
+     "Community driven, self-hosted, and extensible": "Community driven, self-hosted, and extensible",
+     "Compact": "Compact",
+@@ -877,6 +879,7 @@
+     "Confirm your identity before removing this Passkey from your account.": "Confirm your identity before removing this Passkey from your account.",
+     "Confirm your identity with Two-factor Authentication before registering a Passkey.": "Confirm your identity with Two-factor Authentication before registering a Passkey.",
+     "Conflict": "Conflict",
++    "Connect to massive models through unified, standard interface protocols. Power AI applications, manage digital assets efficiently, and connect to the future.": "Connect to massive models through unified, standard interface protocols. Power AI applications, manage digital assets efficiently, and connect to the future.",
+     "Connect": "Connect",
+     "Connect through OpenAI, Claude, Gemini, and other compatible API routes": "Connect through OpenAI, Claude, Gemini, and other compatible API routes",
+     "Connected to io.net service normally.": "Connected to io.net service normally.",
+@@ -1229,6 +1232,7 @@
+     "Do regex replacement in the target field": "Do regex replacement in the target field",
+     "Do string replacement in the target field": "Do string replacement in the target field",
+     "Docs": "Docs",
++    "Documentation": "Documentation",
+     "Documentation Link": "Documentation Link",
+     "Documentation or external knowledge base.": "Documentation or external knowledge base.",
+     "does not exist or might have been removed.": "does not exist or might have been removed.",
+@@ -2228,6 +2232,7 @@
+     "Map upstream status codes to different codes": "Map upstream status codes to different codes",
+     "Market Share": "Market Share",
+     "Marketing": "Marketing",
++    "Massive AI Models": "Massive AI Models",
+     "Match All (AND)": "Match All (AND)",
+     "Match Any (OR)": "Match Any (OR)",
+     "Match Mode": "Match Mode",
+@@ -3712,6 +3717,7 @@
+     "Supported modalities": "Supported modalities",
+     "Supported parameters": "Supported parameters",
+     "Supported variables": "Supported variables",
++    "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration": "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration",
+     "Supports `-thinking`, `-thinking-": "Supports `-thinking`, `-thinking-",
+     "Supports HTML markup or iframe embedding. Enter HTML code directly, or provide a complete URL to automatically embed it as an iframe.": "Supports HTML markup or iframe embedding. Enter HTML code directly, or provide a complete URL to automatically embed it as an iframe.",
+     "Supports PNG, JPG, SVG, or WebP. Recommended size: 128×128 or smaller.": "Supports PNG, JPG, SVG, or WebP. Recommended size: 128×128 or smaller.",
+diff --git a/web/default/src/i18n/locales/fr.json b/web/default/src/i18n/locales/fr.json
+index c26f7933..6416a028 100644
+--- a/web/default/src/i18n/locales/fr.json
++++ b/web/default/src/i18n/locales/fr.json
+@@ -230,6 +230,7 @@
+     "aggregates 50+ AI providers behind one unified API. Manage access, track costs, and scale effortlessly.": "agrège plus de 50 fournisseurs IA derrière une API unifiée. Gérez l'accès, suivez les coûts et évoluez sans effort.",
+     "Aggregation bucket": "Fenêtre d’agrégation",
+     "AGPL v3.0 License": "Licence AGPL v3.0",
++    "AI Application Infrastructure Foundation": "Fondation de l'infrastructure des applications IA",
+     "AI model testing environment": "Environnement de test de modèle IA",
+     "AI models": "Modèles d'IA",
+     "AI models supported": "Modèles d'IA pris en charge",
+@@ -768,6 +769,7 @@
+     "Common Keys": "Clés courantes",
+     "Common Logs": "Journaux courants",
+     "Common ports include 25, 465, and 587": "Les ports courants incluent 25, 465 et 587",
++    "Common App Support": "Prise en charge des applications courantes",
+     "Common User": "Utilisateur commun",
+     "Community driven, self-hosted, and extensible": "Piloté par la communauté, auto-hébergé et extensible",
+     "Compact": "Compact",
+@@ -877,6 +879,7 @@
+     "Confirm your identity before removing this Passkey from your account.": "Confirmez votre identité avant de supprimer cette Passkey de votre compte.",
+     "Confirm your identity with Two-factor Authentication before registering a Passkey.": "Confirmez votre identité avec l’authentification à deux facteurs avant d’enregistrer une Passkey.",
+     "Conflict": "Conflit",
++    "Connect to massive models through unified, standard interface protocols. Power AI applications, manage digital assets efficiently, and connect to the future.": "Connectez-vous à de nombreux modèles via des protocoles d'interface unifiés et standard. Alimentez les applications IA, gérez efficacement les actifs numériques et connectez-vous à l'avenir.",
+     "Connect": "Connecter",
+     "Connect through OpenAI, Claude, Gemini, and other compatible API routes": "Connectez-vous via OpenAI, Claude, Gemini et d'autres routes API compatibles",
+     "Connected to io.net service normally.": "Connexion au service io.net réussie.",
+@@ -1229,6 +1232,7 @@
+     "Do regex replacement in the target field": "Effectuer un remplacement par expression régulière dans le champ cible",
+     "Do string replacement in the target field": "Effectuer un remplacement de chaîne dans le champ cible",
+     "Docs": "Documents",
++    "Documentation": "Documentation",
+     "Documentation Link": "Lien de la documentation",
+     "Documentation or external knowledge base.": "Documentation ou base de connaissances externe.",
+     "does not exist or might have been removed.": "n'existe pas ou a peut-être été supprimé.",
+@@ -2228,6 +2232,7 @@
+     "Map upstream status codes to different codes": "Mapper les codes de statut amont à différents codes",
+     "Market Share": "Part de marché",
+     "Marketing": "Marketing",
++    "Massive AI Models": "Modèles d'IA massifs",
+     "Match All (AND)": "Toutes (AND)",
+     "Match Any (OR)": "N'importe laquelle (OR)",
+     "Match Mode": "Mode de correspondance",
+@@ -3712,6 +3717,7 @@
+     "Supported modalities": "Modalités prises en charge",
+     "Supported parameters": "Paramètres pris en charge",
+     "Supported variables": "Variables supportées",
++    "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration": "Prend en charge la configuration en un clic et s'adapte parfaitement à la configuration multi-protocole NewAPI",
+     "Supports `-thinking`, `-thinking-": "Prend en charge `-thinking`, `-thinking-",
+     "Supports HTML markup or iframe embedding. Enter HTML code directly, or provide a complete URL to automatically embed it as an iframe.": "Prend en charge le balisage HTML ou l'intégration d'iframe. Entrez le code HTML directement, ou fournissez une URL complète pour l'intégrer automatiquement en tant qu'iframe.",
+     "Supports PNG, JPG, SVG, or WebP. Recommended size: 128×128 or smaller.": "Prend en charge PNG, JPG, SVG ou WebP. Taille recommandée : 128×128 ou moins.",
+diff --git a/web/default/src/i18n/locales/ja.json b/web/default/src/i18n/locales/ja.json
+index 3b7a824b..e60c843d 100644
+--- a/web/default/src/i18n/locales/ja.json
++++ b/web/default/src/i18n/locales/ja.json
+@@ -230,6 +230,7 @@
+     "aggregates 50+ AI providers behind one unified API. Manage access, track costs, and scale effortlessly.": "50以上のAIプロバイダーを統一APIで集約。アクセス管理、コスト追跡、スケーリングを簡単に。",
+     "Aggregation bucket": "集計バケット",
+     "AGPL v3.0 License": "AGPL v3.0ライセンス",
++    "AI Application Infrastructure Foundation": "AI アプリケーション基盤",
+     "AI model testing environment": "AIモデルテスト環境",
+     "AI models": "AIモデル",
+     "AI models supported": "AIモデル対応",
+@@ -768,6 +769,7 @@
+     "Common Keys": "よく使うキー",
+     "Common Logs": "一般的なログ",
+     "Common ports include 25, 465, and 587": "一般的なポートには 25, 465, 587 が含まれます",
++    "Common App Support": "一般的なアプリ対応",
+     "Common User": "一般ユーザー",
+     "Community driven, self-hosted, and extensible": "コミュニティ主導、セルフホスト可能、拡張可能",
+     "Compact": "コンパクト",
+@@ -877,6 +879,7 @@
+     "Confirm your identity before removing this Passkey from your account.": "このパスキーをアカウントから削除する前に、本人確認を行ってください。",
+     "Confirm your identity with Two-factor Authentication before registering a Passkey.": "パスキーを登録する前に、二要素認証で本人確認を行ってください。",
+     "Conflict": "競合",
++    "Connect to massive models through unified, standard interface protocols. Power AI applications, manage digital assets efficiently, and connect to the future.": "統一された標準的なインターフェースプロトコルを通じて大量のモデルに接続。AIアプリケーションを支え、デジタル資産を効率的に管理し、未来へつながります。",
+     "Connect": "接続",
+     "Connect through OpenAI, Claude, Gemini, and other compatible API routes": "OpenAI、Claude、Gemini、その他の互換APIルートから接続",
+     "Connected to io.net service normally.": "io.net サービスに正常に接続しました。",
+@@ -1229,6 +1232,7 @@
+     "Do regex replacement in the target field": "ターゲットフィールドで正規表現置換",
+     "Do string replacement in the target field": "ターゲットフィールドで文字列置換",
+     "Docs": "ドキュメント",
++    "Documentation": "ドキュメント",
+     "Documentation Link": "ドキュメントリンク",
+     "Documentation or external knowledge base.": "ドキュメントまたは外部知識ベース。",
+     "does not exist or might have been removed.": "存在しないか、削除された可能性があります。",
+@@ -2228,6 +2232,7 @@
+     "Map upstream status codes to different codes": "アップストリームのステータスコードを別のコードにマッピングする",
+     "Market Share": "マーケットシェア",
+     "Marketing": "マーケティング",
++    "Massive AI Models": "大量の AI モデル",
+     "Match All (AND)": "すべて一致（AND）",
+     "Match Any (OR)": "いずれか一致（OR）",
+     "Match Mode": "マッチモード",
+@@ -3712,6 +3717,7 @@
+     "Supported modalities": "サポートされるモダリティ",
+     "Supported parameters": "対応パラメータ",
+     "Supported variables": "サポートされる変数",
++    "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration": "ワンクリック設定に対応し、NewAPI のマルチプロトコル設定に完璧に適合",
+     "Supports `-thinking`, `-thinking-": "「-thinking」、「-thinking-」をサポートします",
+     "Supports HTML markup or iframe embedding. Enter HTML code directly, or provide a complete URL to automatically embed it as an iframe.": "HTMLマークアップまたはiframe埋め込みをサポートします。HTMLコードを直接入力するか、完全なURLを提供してiframeとして自動的に埋め込みます。",
+     "Supports PNG, JPG, SVG, or WebP. Recommended size: 128×128 or smaller.": "PNG、JPG、SVG、WebPに対応。推奨サイズ: 128×128以下。",
+diff --git a/web/default/src/i18n/locales/ru.json b/web/default/src/i18n/locales/ru.json
+index e316832b..c806ca2e 100644
+--- a/web/default/src/i18n/locales/ru.json
++++ b/web/default/src/i18n/locales/ru.json
+@@ -230,6 +230,7 @@
+     "aggregates 50+ AI providers behind one unified API. Manage access, track costs, and scale effortlessly.": "объединяет 50+ ИИ-провайдеров за единым API. Управляйте доступом, отслеживайте затраты и масштабируйтесь без усилий.",
+     "Aggregation bucket": "Интервал агрегации",
+     "AGPL v3.0 License": "Лицензия AGPL v3.0",
++    "AI Application Infrastructure Foundation": "База инфраструктуры ИИ-приложений",
+     "AI model testing environment": "Среда тестирования ИИ моделей",
+     "AI models": "Модели ИИ",
+     "AI models supported": "Поддерживаемые модели ИИ",
+@@ -768,6 +769,7 @@
+     "Common Keys": "Часто используемые ключи",
+     "Common Logs": "Общие журналы",
+     "Common ports include 25, 465, and 587": "Распространенные порты включают 25, 465 и 587",
++    "Common App Support": "Поддержка распространённых приложений",
+     "Common User": "Обычный пользователь",
+     "Community driven, self-hosted, and extensible": "Развивается сообществом, поддерживает самостоятельное размещение и расширение",
+     "Compact": "Компактная",
+@@ -877,6 +879,7 @@
+     "Confirm your identity before removing this Passkey from your account.": "Подтвердите свою личность перед удалением этой Passkey из вашей учётной записи.",
+     "Confirm your identity with Two-factor Authentication before registering a Passkey.": "Подтвердите свою личность с помощью двухфакторной аутентификации перед регистрацией Passkey.",
+     "Conflict": "Противоречие",
++    "Connect to massive models through unified, standard interface protocols. Power AI applications, manage digital assets efficiently, and connect to the future.": "Подключайтесь к множеству моделей через унифицированные стандартные протоколы интерфейса. Питайте ИИ-приложения, эффективно управляйте цифровыми активами и подключайтесь к будущему.",
+     "Connect": "Подключение",
+     "Connect through OpenAI, Claude, Gemini, and other compatible API routes": "Подключайтесь через OpenAI, Claude, Gemini и другие совместимые API-маршруты",
+     "Connected to io.net service normally.": "Соединение с сервисом io.net установлено.",
+@@ -1229,6 +1232,7 @@
+     "Do regex replacement in the target field": "Выполнить замену по регулярному выражению в целевом поле",
+     "Do string replacement in the target field": "Выполнить замену строки в целевом поле",
+     "Docs": "Документы",
++    "Documentation": "Документация",
+     "Documentation Link": "Ссылка на документацию",
+     "Documentation or external knowledge base.": "Документация или внешняя база знаний.",
+     "does not exist or might have been removed.": "не существует или, возможно, был удален.",
+@@ -2228,6 +2232,7 @@
+     "Map upstream status codes to different codes": "Сопоставить коды статуса вышестоящего сервера с различными кодами",
+     "Market Share": "Доля рынка",
+     "Marketing": "Маркетинг",
++    "Massive AI Models": "Массовые ИИ-модели",
+     "Match All (AND)": "Все совпадения (AND)",
+     "Match Any (OR)": "Любое совпадение (OR)",
+     "Match Mode": "Режим сопоставления",
+@@ -3712,6 +3717,7 @@
+     "Supported modalities": "Поддерживаемые модальности",
+     "Supported parameters": "Поддерживаемые параметры",
+     "Supported variables": "Поддерживаемые переменные",
++    "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration": "Поддерживает настройку в один клик и идеально адаптируется к многопротокольной конфигурации NewAPI",
+     "Supports `-thinking`, `-thinking-": "Поддерживает `-thinking`, `-thinking-",
+     "Supports HTML markup or iframe embedding. Enter HTML code directly, or provide a complete URL to automatically embed it as an iframe.": "Поддерживает HTML-разметку или встраивание iframe. Введите HTML-код напрямую или укажите полный URL для автоматического встраивания в виде iframe.",
+     "Supports PNG, JPG, SVG, or WebP. Recommended size: 128×128 or smaller.": "Поддерживаются PNG, JPG, SVG или WebP. Рекомендуемый размер: 128×128 или меньше.",
+diff --git a/web/default/src/i18n/locales/vi.json b/web/default/src/i18n/locales/vi.json
+index 15fadb5f..774f574b 100644
+--- a/web/default/src/i18n/locales/vi.json
++++ b/web/default/src/i18n/locales/vi.json
+@@ -230,6 +230,7 @@
+     "aggregates 50+ AI providers behind one unified API. Manage access, track costs, and scale effortlessly.": "tổng hợp hơn 50 nhà cung cấp AI sau một API thống nhất. Quản lý truy cập, theo dõi chi phí và mở rộng dễ dàng.",
+     "Aggregation bucket": "Khoảng tổng hợp",
+     "AGPL v3.0 License": "Giấy phép AGPL v3.0",
++    "AI Application Infrastructure Foundation": "Nền tảng cơ sở hạ tầng ứng dụng AI",
+     "AI model testing environment": "Môi trường thử nghiệm mô hình AI",
+     "AI models": "mô hình AI",
+     "AI models supported": "Các mô hình AI được hỗ trợ",
+@@ -768,7 +769,8 @@
+     "Common Keys": "Khóa thường dùng",
+     "Common Logs": "Logarit thập phân",
+     "Common ports include 25, 465, and 587": "Các cổng phổ biến bao gồm 25, 465 và 587",
+-    "Common User": "Người dùng thông thường",
++    "Common App Support": "Hỗ trợ ứng dụng phổ biến",
++    "Common User": "Ngưởi dùng thông thường",
+     "Community driven, self-hosted, and extensible": "Do cộng đồng phát triển, tự lưu trữ và có thể mở rộng",
+     "Compact": "Gọn",
+     "Compare each vendor's token share across the past few weeks": "So sánh thị phần token của từng nhà cung cấp trong vài tuần qua",
+@@ -877,6 +879,7 @@
+     "Confirm your identity before removing this Passkey from your account.": "Hãy xác minh danh tính trước khi gỡ Passkey khỏi tài khoản.",
+     "Confirm your identity with Two-factor Authentication before registering a Passkey.": "Hãy xác minh danh tính bằng Xác thực hai yếu tố trước khi đăng ký Passkey.",
+     "Conflict": "Xung đột",
++    "Connect to massive models through unified, standard interface protocols. Power AI applications, manage digital assets efficiently, and connect to the future.": "Kết nối với hàng loạt mô hình thông qua các giao thức giao diện thống nhất và chuẩn hóa. Cung cấp năng lượng cho ứng dụng AI, quản lý tài sản số hiệu quả và kết nối tương lai.",
+     "Connect": "Kết nối",
+     "Connect through OpenAI, Claude, Gemini, and other compatible API routes": "Kết nối qua OpenAI, Claude, Gemini và các tuyến API tương thích khác",
+     "Connected to io.net service normally.": "Đã kết nối bình thường tới dịch vụ io.net.",
+@@ -1229,6 +1232,7 @@
+     "Do regex replacement in the target field": "Thực hiện thay thế regex trong trường đích",
+     "Do string replacement in the target field": "Thực hiện thay thế chuỗi trong trường đích",
+     "Docs": "Tài liệu",
++    "Documentation": "Tài liệu",
+     "Documentation Link": "Liên kết tài liệu",
+     "Documentation or external knowledge base.": "Tài liệu hoặc cơ sở kiến thức bên ngoài.",
+     "does not exist or might have been removed.": "không tồn tại hoặc có thể đã bị xóa.",
+@@ -2228,6 +2232,7 @@
+     "Map upstream status codes to different codes": "Ánh xạ mã trạng thái upstream sang các mã khác",
+     "Market Share": "Thị phần",
+     "Marketing": "Tiếp thị",
++    "Massive AI Models": "Hàng loạt mô hình AI",
+     "Match All (AND)": "Tất cả khớp (AND)",
+     "Match Any (OR)": "Bất kỳ khớp (OR)",
+     "Match Mode": "Chế độ khớp",
+@@ -3712,6 +3717,7 @@
+     "Supported modalities": "Phương thức hỗ trợ",
+     "Supported parameters": "Tham số hỗ trợ",
+     "Supported variables": "Biến được hỗ trợ",
++    "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration": "Hỗ trợ cấu hình một nhấp chuột và thích ứng hoàn hảo với cấu hình đa giao thức NewAPI",
+     "Supports `-thinking`, `-thinking-": "Hỗ trợ `-thinking`, `-thinking-",
+     "Supports HTML markup or iframe embedding. Enter HTML code directly, or provide a complete URL to automatically embed it as an iframe.": "Hỗ trợ đánh dấu HTML hoặc nhúng iframe. Nhập mã HTML trực tiếp, hoặc cung cấp một URL đầy đủ để tự động nhúng nó dưới dạng một iframe.",
+     "Supports PNG, JPG, SVG, or WebP. Recommended size: 128×128 or smaller.": "Hỗ trợ PNG, JPG, SVG hoặc WebP. Kích thước khuyến nghị: 128×128 hoặc nhỏ hơn.",
+diff --git a/web/default/src/i18n/locales/zh.json b/web/default/src/i18n/locales/zh.json
+index e9fa9844..964210f7 100644
+--- a/web/default/src/i18n/locales/zh.json
++++ b/web/default/src/i18n/locales/zh.json
+@@ -230,6 +230,7 @@
+     "aggregates 50+ AI providers behind one unified API. Manage access, track costs, and scale effortlessly.": "聚合 50+ AI 提供商于统一 API 之后。轻松管理访问、追踪成本、弹性扩展。",
+     "Aggregation bucket": "聚合时间桶",
+     "AGPL v3.0 License": "AGPL v3.0 协议",
++    "AI Application Infrastructure Foundation": "AI 应用基础设施底座",
+     "AI model testing environment": "AI模型测试环境",
+     "AI models": "AI 模型",
+     "AI models supported": "支持的 AI 模型",
+@@ -768,6 +769,7 @@
+     "Common Keys": "常用 Key",
+     "Common Logs": "通用日志",
+     "Common ports include 25, 465, and 587": "常用端口包括 25、465 和 587",
++    "Common App Support": "常用应用支持",
+     "Common User": "普通用户",
+     "Community driven, self-hosted, and extensible": "社区驱动、可自托管、易于扩展",
+     "Compact": "紧凑",
+@@ -877,6 +879,7 @@
+     "Confirm your identity before removing this Passkey from your account.": "在解绑当前账号的 Passkey 前请确认你的身份。",
+     "Confirm your identity with Two-factor Authentication before registering a Passkey.": "在注册 Passkey 前请使用两步验证确认你的身份。",
+     "Conflict": "矛盾",
++    "Connect to massive models through unified, standard interface protocols. Power AI applications, manage digital assets efficiently, and connect to the future.": "通过统一、标准的接口协议接入海量模型。承载 AI 应用，高效管理数字资产，连接未来。",
+     "Connect": "连接",
+     "Connect through OpenAI, Claude, Gemini, and other compatible API routes": "通过 OpenAI、Claude、Gemini 以及其他兼容 API 路由接入",
+     "Connected to io.net service normally.": "已正常连接 io.net 服务。",
+@@ -1229,6 +1232,7 @@
+     "Do regex replacement in the target field": "在目标字段里做正则替换",
+     "Do string replacement in the target field": "在目标字段里做字符串替换",
+     "Docs": "文档",
++    "Documentation": "文档",
+     "Documentation Link": "文档链接",
+     "Documentation or external knowledge base.": "文档或外部知识库。",
+     "does not exist or might have been removed.": "不存在或可能已被移除。",
+@@ -2228,6 +2232,7 @@
+     "Map upstream status codes to different codes": "将上游状态码映射到不同的代码",
+     "Market Share": "市场份额",
+     "Marketing": "市场营销",
++    "Massive AI Models": "海量 AI 模型",
+     "Match All (AND)": "必须全部满足（AND）",
+     "Match Any (OR)": "满足任一条件（OR）",
+     "Match Mode": "匹配方式",
+@@ -3712,6 +3717,7 @@
+     "Supported modalities": "支持的模态",
+     "Supported parameters": "支持的参数",
+     "Supported variables": "支持变量",
++    "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration": "支持一键配置并完美适配 NewAPI 多协议配置",
+     "Supports `-thinking`, `-thinking-": "支持 `-thinking`、`-thinking-`",
+     "Supports HTML markup or iframe embedding. Enter HTML code directly, or provide a complete URL to automatically embed it as an iframe.": "支持 HTML 标记或 iframe 嵌入。直接输入 HTML 代码，或提供完整的 URL 以将其自动嵌入为 iframe。",
+     "Supports PNG, JPG, SVG, or WebP. Recommended size: 128×128 or smaller.": "支持 PNG、JPG、SVG 或 WebP，建议尺寸不超过 128×128。",
+diff --git a/web/default/src/styles/index.css b/web/default/src/styles/index.css
+index 5040724b..8a183d8f 100644
+--- a/web/default/src/styles/index.css
++++ b/web/default/src/styles/index.css
+@@ -25,8 +25,13 @@
+   html {
+     @apply overflow-x-hidden font-sans;
+   }
++  .font-system {
++    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto',
++      'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans',
++      'Helvetica Neue', sans-serif;
++  }
+   body {
+-    @apply bg-background text-foreground has-[div[data-variant='inset']]:bg-sidebar min-h-svh w-full font-sans;
++    @apply bg-background text-foreground has-[div[data-variant='inset']]:bg-sidebar min-h-svh w-full;
+   }
+ 
+   /* Keep sticky headers stable while primitives lock body scrolling. */
+diff --git a/web/default/src/styles/theme.css b/web/default/src/styles/theme.css
+index 3bcab288..c65c09da 100644
+--- a/web/default/src/styles/theme.css
++++ b/web/default/src/styles/theme.css
+@@ -1,11 +1,13 @@
+ @custom-variant dark (&:is(.dark *));
+ 
+ @theme inline {
+-  --font-sans: 'Public Sans', sans-serif;
++  --font-sans: 'Public Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI',
++    sans-serif;
+   --font-inter:
+-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu',
+-    'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
++    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+   --font-manrope:
++    'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
++  --font-system:
+     -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu',
+     'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+ 

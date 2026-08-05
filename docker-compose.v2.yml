@@ -1,0 +1,46 @@
+# new-api-v2 本地部署（合并上游前端后的版本）
+#
+# 与 /Volumes/D/new-api 的 wy 版完全隔离：
+#   - 独立容器名 new-api-v2、独立端口 3010
+#   - 独立数据库 new-api-v2、Redis 独立 db 1
+#   - 独立数据卷 ./data、./logs
+# 复用已在运行的 mysql / redis 容器，通过 external 网络接入。
+#
+# 用法：
+#   docker compose -f docker-compose.v2.yml up -d --build
+#   访问 http://localhost:3010
+
+services:
+  new-api-v2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: new-api-v2:local
+    container_name: new-api-v2
+    restart: always
+    command: --log-dir /app/logs
+    ports:
+      - "3010:3000"
+    volumes:
+      - ./data:/data
+      - ./logs:/app/logs
+    environment:
+      - SQL_DSN=root:123456@tcp(mysql:3306)/new-api-v2?charset=utf8mb4&parseTime=True&loc=Local
+      - REDIS_CONN_STRING=redis://:123456@redis:6379/1
+      - TZ=Asia/Shanghai
+      - ERROR_LOG_ENABLED=true
+      - BATCH_UPDATE_ENABLED=true
+      - NODE_NAME=new-api-v2-node-1
+      - SESSION_SECRET=v2_local_dev_only_change_in_prod
+    networks:
+      - new-api-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:3000/api/status | grep -o '\"success\":\\s*true' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  new-api-network:
+    name: new-api_new-api-network
+    external: true
