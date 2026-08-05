@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import type { AuthSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { BasicAuthSection } from './basic-auth-section'
@@ -10,7 +28,6 @@ const AUTH_SECTIONS = [
   {
     id: 'basic-auth',
     titleKey: 'Basic Authentication',
-    descriptionKey: 'Configure password-based login and registration',
     build: (settings: AuthSettings) => (
       <BasicAuthSection
         defaultValues={{
@@ -28,9 +45,9 @@ const AUTH_SECTIONS = [
   {
     id: 'oauth',
     titleKey: 'OAuth Integrations',
-    descriptionKey: 'Configure third-party authentication providers',
     build: (settings: AuthSettings) => (
       <OAuthSection
+        serverAddress={settings.ServerAddress}
         defaultValues={{
           GitHubOAuthEnabled: settings.GitHubOAuthEnabled,
           GitHubClientId: settings.GitHubClientId,
@@ -39,6 +56,7 @@ const AUTH_SECTIONS = [
           'discord.client_id': settings['discord.client_id'],
           'discord.client_secret': settings['discord.client_secret'],
           'oidc.enabled': settings['oidc.enabled'],
+          'oidc.display_name': settings['oidc.display_name'],
           'oidc.client_id': settings['oidc.client_id'],
           'oidc.client_secret': settings['oidc.client_secret'],
           'oidc.well_known': settings['oidc.well_known'],
@@ -64,7 +82,6 @@ const AUTH_SECTIONS = [
   {
     id: 'passkey',
     titleKey: 'Passkey Authentication',
-    descriptionKey: 'Configure Passkey (WebAuthn) login settings',
     build: (settings: AuthSettings) => (
       <PasskeySection
         defaultValues={{
@@ -78,14 +95,8 @@ const AUTH_SECTIONS = [
             | 'required'
             | 'preferred'
             | 'discouraged',
-          'passkey.attachment_preference': (settings[
-            'passkey.attachment_preference'
-          ] === ''
-            ? 'none'
-            : settings['passkey.attachment_preference']) as
-            | 'none'
-            | 'platform'
-            | 'cross-platform',
+          'passkey.attachment_preference':
+            settings['passkey.attachment_preference'],
         }}
       />
     ),
@@ -93,7 +104,6 @@ const AUTH_SECTIONS = [
   {
     id: 'bot-protection',
     titleKey: 'Bot Protection',
-    descriptionKey: 'Protect login and registration with Cloudflare Turnstile',
     build: (settings: AuthSettings) => (
       <BotProtectionSection
         defaultValues={{
@@ -107,8 +117,9 @@ const AUTH_SECTIONS = [
   {
     id: 'custom-oauth',
     titleKey: 'Custom OAuth',
-    descriptionKey: 'Configure custom OAuth providers for user authentication',
-    build: () => <CustomOAuthSection />,
+    build: (settings: AuthSettings) => (
+      <CustomOAuthSection serverAddress={settings.ServerAddress} />
+    ),
   },
 ] as const
 
@@ -125,3 +136,4 @@ export const AUTH_SECTION_IDS = authRegistry.sectionIds
 export const AUTH_DEFAULT_SECTION = authRegistry.defaultSection
 export const getAuthSectionNavItems = authRegistry.getSectionNavItems
 export const getAuthSectionContent = authRegistry.getSectionContent
+export const getAuthSectionMeta = authRegistry.getSectionMeta

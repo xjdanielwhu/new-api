@@ -1,11 +1,26 @@
-import { useMemo } from 'react'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { useQuery } from '@tanstack/react-query'
-import { type ColumnDef } from '@tanstack/react-table'
+import type { ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
-import { useAuthStore } from '@/stores/auth-store'
-import { getUserGroups } from '@/lib/api'
-import { formatQuota, formatTimestampToDate } from '@/lib/format'
-import { cn } from '@/lib/utils'
+
+import { StatusBadge } from '@/components/status-badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Progress } from '@/components/ui/progress'
 import {
@@ -13,16 +28,22 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { DataTableColumnHeader } from '@/components/data-table'
-import { GroupBadge } from '@/components/group-badge'
-import { StatusBadge } from '@/components/status-badge'
-import { getSystemOptions } from '@/features/system-settings/api'
+import { useMediaQuery } from '@/hooks'
+import { toIntlLocale } from '@/i18n/languages'
+import { getUserGroups } from '@/lib/api'
+import dayjs from '@/lib/dayjs'
+import { formatQuota } from '@/lib/format'
+import { cn } from '@/lib/utils'
+
 import { API_KEY_STATUSES } from '../constants'
-import { type ApiKey } from '../types'
+import type { ApiKey } from '../types'
+import { ApiKeyGroupCell } from './api-key-group-cell'
+import { ApiKeyTimestampCell } from './api-key-timestamp-cell'
 import {
   ApiKeyCell,
-  ModelLimitsCell,
   IpRestrictionsCell,
+  ModelLimitsCell,
+  UnlimitedQuotaBadge,
 } from './api-keys-cells'
 import { DataTableRowActions } from './data-table-row-actions'
 
@@ -32,38 +53,16 @@ function getQuotaProgressColor(percentage: number): string {
   return '[&_[data-slot=progress-indicator]]:bg-emerald-500'
 }
 
-function useGroupRatios(): Record<string, number> {
-  const isAdmin = useAuthStore((s) =>
-    Boolean(s.auth.user?.role && s.auth.user.role >= 10)
-  )
-
-  const { data: adminData } = useQuery({
-    queryKey: ['system-options-group-ratio'],
-    queryFn: getSystemOptions,
-    enabled: isAdmin,
-    staleTime: 5 * 60 * 1000,
-    select: (res) => {
-      if (!res.success || !res.data) return {}
-      const option = res.data.find((o) => o.key === 'GroupRatio')
-      if (!option?.value) return {}
-      try {
-        return JSON.parse(option.value) as Record<string, number>
-      } catch {
-        return {}
-      }
-    },
-  })
-
-  const { data: userGroupsData } = useQuery({
-    queryKey: ['user-self-groups'],
+function useGroupRatios(): Record<string, number | string> {
+  const { data } = useQuery({
+    queryKey: ['user-groups'],
     queryFn: getUserGroups,
-    enabled: !isAdmin,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 0,
     select: (res) => {
       if (!res.success || !res.data) return {}
-      const ratios: Record<string, number> = {}
+      const ratios: Record<string, number | string> = {}
       for (const [group, info] of Object.entries(res.data)) {
-        if (typeof info.ratio === 'number') {
+        if (typeof info.ratio === 'number' || typeof info.ratio === 'string') {
           ratios[group] = info.ratio
         }
       }
@@ -71,15 +70,16 @@ function useGroupRatios(): Record<string, number> {
     },
   })
 
-  return useMemo(
-    () => (isAdmin ? adminData : userGroupsData) ?? {},
-    [isAdmin, adminData, userGroupsData]
-  )
+  return data ?? {}
 }
 
-export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
-  const { t } = useTranslation()
+export function useApiKeysColumns(now: number): ColumnDef<ApiKey>[] {
+  const { t, i18n } = useTranslation()
   const groupRatios = useGroupRatios()
+  const shouldReduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
+  const justNowLabel = t('Just now')
+  const staleAccessThreshold = dayjs(now).subtract(3, 'month').valueOf()
   return [
     {
       id: 'select',
@@ -102,25 +102,20 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
       ),
       enableSorting: false,
       enableHiding: false,
-      meta: { label: t('Select') },
+      size: 40,
     },
     {
       accessorKey: 'name',
-      header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Name')} />
-      ),
+      header: t('Name'),
       cell: ({ row }) => (
-        <div className='max-w-[200px] truncate font-medium'>
-          {row.getValue('name')}
-        </div>
+        <span className='font-medium'>{row.getValue('name')}</span>
       ),
-      meta: { label: t('Name'), mobileTitle: true },
+      size: 180,
+      meta: { mobileTitle: true },
     },
     {
       accessorKey: 'status',
-      header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Status')} />
-      ),
+      header: t('Status'),
       cell: ({ row }) => {
         const statusConfig = API_KEY_STATUSES[row.getValue('status') as number]
         if (!statusConfig) return null
@@ -128,13 +123,14 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
           <StatusBadge
             label={t(statusConfig.label)}
             variant={statusConfig.variant}
-            showDot={statusConfig.showDot}
             copyable={false}
+            className='-ml-1.5'
           />
         )
       },
       filterFn: (row, id, value) => value.includes(String(row.getValue(id))),
-      meta: { label: t('Status'), mobileBadge: true },
+      size: 120,
+      meta: { mobileBadge: true },
     },
     {
       id: 'key',
@@ -142,24 +138,16 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
       header: t('API Key'),
       cell: ({ row }) => <ApiKeyCell apiKey={row.original} />,
       enableSorting: false,
-      meta: { label: t('API Key') },
+      size: 260,
     },
     {
       id: 'quota',
       accessorKey: 'remain_quota',
-      header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Quota')} />
-      ),
+      header: t('Quota'),
       cell: ({ row }) => {
         const apiKey = row.original
         if (apiKey.unlimited_quota) {
-          return (
-            <StatusBadge
-              label={t('Unlimited')}
-              variant='neutral'
-              copyable={false}
-            />
-          )
+          return <UnlimitedQuotaBadge used={apiKey.used_quota} />
         }
 
         const used = apiKey.used_quota
@@ -200,105 +188,83 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
           </Tooltip>
         )
       },
-      meta: { label: t('Quota') },
+      size: 170,
     },
     {
       accessorKey: 'group',
-      header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Group')} />
-      ),
+      header: t('Group'),
       cell: ({ row }) => {
         const apiKey = row.original
         const group = row.getValue('group') as string
-        const ratio = group && group !== 'auto' ? groupRatios[group] : undefined
-
-        if (group === 'auto') {
-          return (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span className='inline-flex items-center gap-1.5 text-xs' />
-                }
-              >
-                <GroupBadge group='auto' />
-                {apiKey.cross_group_retry && (
-                  <>
-                    <span className='text-muted-foreground/30'>·</span>
-                    <span className='text-muted-foreground/60'>
-                      {t('Cross-group')}
-                    </span>
-                  </>
-                )}
-              </TooltipTrigger>
-              <TooltipContent>
-                <span className='text-xs'>
-                  {t(
-                    'Automatically selects the best available group with circuit breaker mechanism'
-                  )}
-                </span>
-              </TooltipContent>
-            </Tooltip>
-          )
-        }
-        return <GroupBadge group={group} ratio={ratio} />
+        return (
+          <ApiKeyGroupCell
+            group={group}
+            ratio={groupRatios[group]}
+            crossGroupRetry={apiKey.cross_group_retry}
+            shouldReduceMotion={shouldReduceMotion}
+          />
+        )
       },
-      meta: { label: t('Group'), mobileHidden: true },
+      size: 220,
+      meta: { mobileHidden: true },
     },
     {
       id: 'model_limits',
       accessorKey: 'model_limits',
-      header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Models')} />
-      ),
+      header: t('Models'),
       cell: ({ row }) => <ModelLimitsCell apiKey={row.original} />,
       enableSorting: false,
-      meta: { label: t('Models'), mobileHidden: true },
+      size: 160,
+      meta: { mobileHidden: true },
     },
     {
       id: 'allow_ips',
       accessorKey: 'allow_ips',
-      header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('IP Restriction')} />
-      ),
+      header: t('IP Restriction'),
       cell: ({ row }) => <IpRestrictionsCell apiKey={row.original} />,
       enableSorting: false,
-      meta: { label: t('IP Restriction'), mobileHidden: true },
+      size: 160,
+      meta: { mobileHidden: true },
     },
     {
       accessorKey: 'created_time',
-      header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Created')} />
-      ),
+      header: t('Created'),
       cell: ({ row }) => (
-        <span className='text-muted-foreground font-mono text-xs tabular-nums'>
-          {formatTimestampToDate(row.getValue('created_time'))}
-        </span>
+        <ApiKeyTimestampCell
+          timestamp={row.getValue('created_time')}
+          now={now}
+          locale={locale}
+          justNowLabel={justNowLabel}
+          className='text-muted-foreground'
+        />
       ),
-      meta: { label: t('Created'), mobileHidden: true },
+      size: 180,
+      meta: { mobileHidden: true },
     },
     {
       accessorKey: 'accessed_time',
-      header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Last Used')} />
-      ),
+      header: t('Last Used'),
       cell: ({ row }) => {
         const accessedTime = row.getValue('accessed_time') as number
-        if (!accessedTime) {
-          return <span className='text-muted-foreground text-xs'>-</span>
-        }
+        const isStale =
+          accessedTime > 0 && accessedTime * 1000 < staleAccessThreshold
+
         return (
-          <span className='text-muted-foreground font-mono text-xs tabular-nums'>
-            {formatTimestampToDate(accessedTime)}
-          </span>
+          <ApiKeyTimestampCell
+            timestamp={accessedTime}
+            now={now}
+            locale={locale}
+            justNowLabel={justNowLabel}
+            className={isStale ? 'text-warning' : 'text-muted-foreground'}
+          />
         )
       },
-      meta: { label: t('Last Used'), mobileHidden: true },
+      size: 180,
+      meta: { mobileHidden: true },
     },
     {
       accessorKey: 'expired_time',
-      header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Expires')} />
-      ),
+      header: t('Expires'),
       cell: ({ row }) => {
         const expiredTime = row.getValue('expired_time') as number
         if (expiredTime === -1) {
@@ -307,28 +273,31 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
               label={t('Never')}
               variant='neutral'
               copyable={false}
+              className='-ml-1.5'
             />
           )
         }
-        const isExpired = expiredTime * 1000 < Date.now()
+        const isExpired = expiredTime * 1000 < now
         return (
-          <span
+          <ApiKeyTimestampCell
+            timestamp={expiredTime}
+            now={now}
+            locale={locale}
+            justNowLabel={justNowLabel}
             className={cn(
-              'font-mono text-xs tabular-nums',
               isExpired ? 'text-destructive' : 'text-muted-foreground'
             )}
-          >
-            {formatTimestampToDate(expiredTime)}
-          </span>
+          />
         )
       },
-      meta: { label: t('Expires'), mobileHidden: true },
+      size: 180,
+      meta: { mobileHidden: true },
     },
     {
       id: 'actions',
+      header: () => t('Actions'),
       cell: ({ row }) => <DataTableRowActions row={row} />,
-      meta: { label: t('Actions') },
-      size: 88,
+      meta: { pinned: 'right' as const },
     },
   ]
 }

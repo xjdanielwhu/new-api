@@ -1,17 +1,38 @@
-import { useMemo } from 'react'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { Activity, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
+
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import {
-  aggregateUptime,
   formatUptimePct,
-  type UptimeDayPoint,
-} from '../lib/mock-stats'
+  getSuccessRateDotClass,
+  getSuccessRateTextClass,
+} from '@/features/performance-metrics/lib/format'
+import { cn } from '@/lib/utils'
+
+import { aggregateUptime, type UptimeDayPoint } from '../lib/mock-stats'
 
 // ---------------------------------------------------------------------------
 // Uptime sparkline
@@ -35,27 +56,12 @@ type UptimeSparklineProps = {
   className?: string
 }
 
-function colourFor(uptime: number): string {
-  if (uptime >= 99.9) return 'bg-emerald-500'
-  if (uptime >= 99.0) return 'bg-emerald-400'
-  if (uptime >= 95.0) return 'bg-amber-500'
-  if (uptime >= 90.0) return 'bg-amber-600'
-  return 'bg-rose-500'
-}
-
 function heightFor(uptime: number): string {
   if (uptime >= 99.9) return 'h-full'
   if (uptime >= 99.0) return 'h-[88%]'
   if (uptime >= 95.0) return 'h-[72%]'
   if (uptime >= 90.0) return 'h-[55%]'
   return 'h-[40%]'
-}
-
-function overallTextColour(pct: number): string {
-  if (pct >= 99.9) return 'text-emerald-600 dark:text-emerald-400'
-  if (pct >= 99.0) return 'text-emerald-600 dark:text-emerald-400'
-  if (pct >= 95.0) return 'text-amber-600 dark:text-amber-400'
-  return 'text-rose-600 dark:text-rose-400'
 }
 
 export function UptimeSparkline(props: UptimeSparklineProps) {
@@ -90,7 +96,7 @@ export function UptimeSparkline(props: UptimeSparklineProps) {
               render={
                 <div
                   className={cn(
-                    'rounded-[1px] transition-opacity hover:opacity-80',
+                    'rounded-sm transition-opacity hover:opacity-80',
                     barWidth,
                     containerHeight,
                     'flex items-end'
@@ -100,8 +106,8 @@ export function UptimeSparkline(props: UptimeSparklineProps) {
             >
               <div
                 className={cn(
-                  'w-full rounded-[1px]',
-                  colourFor(day.uptime_pct),
+                  'w-full rounded-sm',
+                  getSuccessRateDotClass(day.uptime_pct),
                   heightFor(day.uptime_pct)
                 )}
                 aria-hidden
@@ -123,7 +129,7 @@ export function UptimeSparkline(props: UptimeSparklineProps) {
         <span
           className={cn(
             'font-mono text-sm font-semibold tabular-nums',
-            overallTextColour(overall)
+            getSuccessRateTextClass(overall)
           )}
         >
           {overall.toFixed(1)}%

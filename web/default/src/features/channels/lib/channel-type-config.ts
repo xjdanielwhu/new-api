@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { CHANNEL_TYPES } from '../constants'
 
 // ============================================================================
@@ -114,6 +132,36 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       key: 'Replicate API Token',
       models: 'Replicate model IDs',
       baseUrl: 'Default: https://api.replicate.com',
+    },
+  },
+  58: {
+    id: 58,
+    name: CHANNEL_TYPES[58],
+    icon: 'newapi',
+    hints: {
+      baseUrl: 'Fallback base URL',
+      key: 'Used by route auth templates',
+      models: 'Models exposed by this channel',
+    },
+  },
+  59: {
+    id: 59,
+    name: CHANNEL_TYPES[59],
+    icon: 'Sub2API',
+    hints: {
+      baseUrl: 'Sub2API gateway base URL',
+      key: 'Sub2API API Key',
+      models: 'Models fetched from upstream /v1/models',
+    },
+  },
+  60: {
+    id: 60,
+    name: CHANNEL_TYPES[60],
+    icon: 'NewAPI',
+    hints: {
+      baseUrl: 'Base URL is required for this channel type',
+      key: 'Enter API key for this channel',
+      models: 'Models',
     },
   },
 }

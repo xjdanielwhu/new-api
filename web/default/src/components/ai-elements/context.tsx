@@ -1,10 +1,28 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 'use client'
 
-import { type ComponentProps, createContext, useContext } from 'react'
 import type { LanguageModelUsage } from 'ai'
+import { type ComponentProps, createContext, useContext } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getUsage } from 'tokenlens'
-import { cn } from '@/lib/utils'
+
 import { Button } from '@/components/ui/button'
 import {
   HoverCard,
@@ -12,6 +30,7 @@ import {
   HoverCardTrigger,
 } from '@/components/ui/hover-card'
 import { Progress } from '@/components/ui/progress'
+import { cn } from '@/lib/utils'
 
 const PERCENT_MAX = 100
 const ICON_RADIUS = 10
@@ -328,7 +347,7 @@ export const ContextReasoningUsage = ({
 }: ContextReasoningUsageProps) => {
   const { t } = useTranslation()
   const { usage, modelId } = useContextValue()
-  const reasoningTokens = usage?.reasoningTokens ?? 0
+  const reasoningTokens = usage?.outputTokenDetails.reasoningTokens ?? 0
 
   if (children) {
     return children
@@ -369,7 +388,7 @@ export const ContextCacheUsage = ({
 }: ContextCacheUsageProps) => {
   const { t } = useTranslation()
   const { usage, modelId } = useContextValue()
-  const cacheTokens = usage?.cachedInputTokens ?? 0
+  const cacheTokens = usage?.inputTokenDetails.cacheReadTokens ?? 0
 
   if (children) {
     return children

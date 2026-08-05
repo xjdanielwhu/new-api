@@ -1,6 +1,36 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 /* eslint-disable react-refresh/only-export-components */
 'use client'
 
+import type { ChatStatus, FileUIPart } from 'ai'
+import {
+  ImageIcon,
+  Loader2Icon,
+  MicIcon,
+  PaperclipIcon,
+  PlusIcon,
+  SendIcon,
+  SquareIcon,
+  XIcon,
+} from 'lucide-react'
+import { nanoid } from 'nanoid'
 import {
   type ChangeEvent,
   type ChangeEventHandler,
@@ -23,20 +53,8 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { ChatStatus, FileUIPart } from 'ai'
-import {
-  ImageIcon,
-  Loader2Icon,
-  MicIcon,
-  PaperclipIcon,
-  PlusIcon,
-  SendIcon,
-  SquareIcon,
-  XIcon,
-} from 'lucide-react'
-import { nanoid } from 'nanoid'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
+
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -71,6 +89,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { cn } from '@/lib/utils'
 
 // ============================================================================
 // Provider Context & Types
@@ -429,7 +448,7 @@ export type PromptInputProps = Omit<
   ) => void | Promise<void>
   /**
    * Optional className applied to the inner InputGroup wrapper
-   * (useful for customizing rounded corners, e.g., rounded-[20px]).
+   * (useful for layout or semantic radius utilities such as rounded-xl).
    */
   groupClassName?: string
 }

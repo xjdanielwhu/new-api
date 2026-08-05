@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { SystemInfoSection } from '../general/system-info-section'
 import {
   parseHeaderNavModules,
@@ -15,13 +33,9 @@ const SITE_SECTIONS = [
   {
     id: 'system-info',
     titleKey: 'System Information',
-    descriptionKey: 'Configure basic system information and branding',
     build: (settings: SiteSettings) => (
       <SystemInfoSection
         defaultValues={{
-          theme: {
-            frontend: settings['theme.frontend'] as 'default' | 'classic',
-          },
           SystemName: settings.SystemName,
           Logo: settings.Logo,
           Footer: settings.Footer,
@@ -39,7 +53,6 @@ const SITE_SECTIONS = [
   {
     id: 'notice',
     titleKey: 'System Notice',
-    descriptionKey: 'Configure system maintenance notice',
     build: (settings: SiteSettings) => (
       <NoticeSection defaultValue={settings.Notice ?? ''} />
     ),
@@ -47,7 +60,6 @@ const SITE_SECTIONS = [
   {
     id: 'header-navigation',
     titleKey: 'Header navigation',
-    descriptionKey: 'Configure header navigation modules',
     build: (settings: SiteSettings) => {
       const headerNavConfig = parseHeaderNavModules(settings.HeaderNavModules)
       const headerNavSerialized = serializeHeaderNavModules(headerNavConfig)
@@ -62,7 +74,6 @@ const SITE_SECTIONS = [
   {
     id: 'sidebar-modules',
     titleKey: 'Sidebar modules',
-    descriptionKey: 'Configure sidebar modules for admin',
     build: (settings: SiteSettings) => {
       const sidebarConfig = parseSidebarModulesAdmin(
         settings.SidebarModulesAdmin
@@ -91,3 +102,4 @@ export const SITE_SECTION_IDS = siteRegistry.sectionIds
 export const SITE_DEFAULT_SECTION = siteRegistry.defaultSection
 export const getSiteSectionNavItems = siteRegistry.getSectionNavItems
 export const getSiteSectionContent = siteRegistry.getSectionContent
+export const getSiteSectionMeta = siteRegistry.getSectionMeta

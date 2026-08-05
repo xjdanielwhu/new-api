@@ -1,18 +1,36 @@
-import { useState } from 'react'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { AlertTriangle } from 'lucide-react'
+import { lazy, Suspense, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+
+import { Dialog } from '@/components/dialog'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+
+const Markdown = lazy(() =>
+  import('@/components/ui/markdown').then((module) => ({
+    default: module.Markdown,
+  }))
+)
 
 interface StatusCodeRiskDialogProps {
   open: boolean
@@ -66,73 +84,21 @@ export function StatusCodeRiskDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='max-w-lg'>
-        <DialogHeader>
-          <DialogTitle className='text-destructive flex items-center gap-2'>
-            <AlertTriangle className='h-5 w-5' />
-            {t('High-risk operation confirmation')}
-          </DialogTitle>
-          <DialogDescription>
-            {t('High-risk status code retry risk disclaimer')}
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className='space-y-4'>
-          {detailItems.length > 0 && (
-            <div className='border-destructive/30 bg-destructive/5 rounded-lg border p-3'>
-              <p className='mb-2 text-sm font-medium'>
-                {t('Detected high-risk status code redirect rules')}
-              </p>
-              <ul className='list-inside list-disc text-sm'>
-                {detailItems.map((item) => (
-                  <li key={item} className='font-mono text-xs'>
-                    {item}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <div className='space-y-2'>
-            {CHECKLIST_KEYS.map((key, idx) => (
-              <div key={key} className='flex items-start gap-2'>
-                <Checkbox
-                  id={`risk-check-${idx}`}
-                  checked={checkedItems.has(idx)}
-                  onCheckedChange={() => toggleCheck(idx)}
-                />
-                <Label
-                  htmlFor={`risk-check-${idx}`}
-                  className='text-sm leading-tight'
-                >
-                  {t(key)}
-                </Label>
-              </div>
-            ))}
-          </div>
-
-          <div className='space-y-1.5'>
-            <Label className='text-sm'>
-              {t('Action confirmation')}:{' '}
-              <code className='bg-muted rounded px-1 text-xs'>
-                {requiredText}
-              </code>
-            </Label>
-            <Input
-              value={confirmText}
-              onChange={(e) => setConfirmText(e.target.value)}
-              placeholder={t('High-risk status code retry input placeholder')}
-            />
-            {confirmText && !textMatches && (
-              <p className='text-destructive text-xs'>
-                {t('High-risk status code retry input mismatch')}
-              </p>
-            )}
-          </div>
-        </div>
-
-        <DialogFooter>
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={
+        <>
+          <AlertTriangle className='h-5 w-5' />
+          {t('High-risk operation confirmation')}
+        </>
+      }
+      contentClassName='sm:max-w-3xl'
+      titleClassName='text-destructive flex items-center gap-2'
+      contentHeight='auto'
+      bodyClassName='space-y-4'
+      footer={
+        <>
           <Button variant='outline' onClick={handleCancel}>
             {t('Cancel')}
           </Button>
@@ -143,8 +109,79 @@ export function StatusCodeRiskDialog({
           >
             {t('I confirm enabling high-risk retry')}
           </Button>
-        </DialogFooter>
-      </DialogContent>
+        </>
+      }
+    >
+      <div className='space-y-4'>
+        {open ? (
+          <div className='border-warning/40 bg-warning/5 rounded-lg border p-3 sm:p-4'>
+            <Suspense
+              fallback={
+                <div
+                  aria-hidden='true'
+                  className='bg-warning/10 h-32 animate-pulse rounded-md'
+                />
+              }
+            >
+              <Markdown className='[&_h3]:text-warning text-sm [&_h3]:text-base'>
+                {t('High-risk status code retry risk disclaimer')}
+              </Markdown>
+            </Suspense>
+          </div>
+        ) : null}
+
+        {detailItems.length > 0 && (
+          <div className='border-destructive/30 bg-destructive/5 rounded-lg border p-3'>
+            <p className='mb-2 text-sm font-medium'>
+              {t('Detected high-risk status code redirect rules')}
+            </p>
+            <ul className='list-inside list-disc text-sm'>
+              {detailItems.map((item) => (
+                <li key={item} className='font-mono text-xs'>
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className='space-y-2'>
+          {CHECKLIST_KEYS.map((key, idx) => (
+            <div key={key} className='flex items-start gap-2'>
+              <Checkbox
+                id={`risk-check-${idx}`}
+                checked={checkedItems.has(idx)}
+                onCheckedChange={() => toggleCheck(idx)}
+              />
+              <Label
+                htmlFor={`risk-check-${idx}`}
+                className='text-sm leading-tight'
+              >
+                {t(key)}
+              </Label>
+            </div>
+          ))}
+        </div>
+
+        <div className='space-y-1.5'>
+          <Label className='text-sm'>
+            {t('Action confirmation')}:{' '}
+            <code className='bg-muted rounded px-1 text-xs'>
+              {requiredText}
+            </code>
+          </Label>
+          <Input
+            value={confirmText}
+            onChange={(e) => setConfirmText(e.target.value)}
+            placeholder={t('High-risk status code retry input placeholder')}
+          />
+          {confirmText && !textMatches && (
+            <p className='text-destructive text-xs'>
+              {t('High-risk status code retry input mismatch')}
+            </p>
+          )}
+        </div>
+      </div>
     </Dialog>
   )
 }

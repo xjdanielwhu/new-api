@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 // ============================================================================
 // Wallet Type Definitions
 // ============================================================================
@@ -33,6 +51,11 @@ export type WaffoPancakePaymentResponse = ApiResponse<
       session_id?: string
       expires_at?: number | string
       order_id?: string
+      // Self-service session token + expiry — surfaced by the backend so
+      // future flows (refund / cancel from new-api's own UI) can use them
+      // without re-issuing checkout. Not consumed by the current handler.
+      token?: string
+      token_expires_at?: number | string
     }
   | string
 >
@@ -71,11 +94,11 @@ export interface PaymentMethod {
   name: string
   /** Payment method type identifier */
   type: string
-  /** Optional color for UI display */
+  /** Legacy optional color for UI display */
   color?: string
   /** Minimum topup amount for this payment method */
   min_topup?: number
-  /** Optional icon URL provided by backend (preferred over built-in icons) */
+  /** Optional react-icons component name or safe icon URL */
   icon?: string
 }
 
@@ -127,6 +150,12 @@ export interface TopupInfo {
   enable_waffo_pancake_topup?: boolean
   /** Minimum topup amount for Waffo Pancake */
   waffo_pancake_min_topup?: number
+  /** Whether redemption code usage is enabled */
+  enable_redemption?: boolean
+  /** Whether compliance confirmation has been completed */
+  payment_compliance_confirmed?: boolean
+  /** Current compliance terms version */
+  payment_compliance_terms_version?: string
 }
 
 /**

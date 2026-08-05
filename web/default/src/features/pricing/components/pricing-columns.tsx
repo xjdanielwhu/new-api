@@ -1,15 +1,34 @@
-import { type ColumnDef } from '@tanstack/react-table'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import type { ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
-import { getLobeIcon } from '@/lib/lobe-icon'
+
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
-import { DataTableColumnHeader } from '@/components/data-table/column-header'
+  BadgeCell,
+  BadgeListCell,
+  DataTableColumnHeader,
+} from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
-import { DEFAULT_TOKEN_UNIT, QUOTA_TYPE_VALUES } from '../constants'
+import { StatusBadge } from '@/components/status-badge'
+import { getLobeIcon } from '@/lib/lobe-icon'
+
+import { DEFAULT_TOKEN_UNIT } from '../constants'
 import {
   getDynamicDisplayGroupRatio,
   getDynamicPricingSummary,
@@ -22,6 +41,7 @@ import {
   stripTrailingZeros,
 } from '../lib/price'
 import type { PricingModel, TokenUnit } from '../types'
+import { ModelBillingModeBadge } from './model-billing-mode-badge'
 
 // ----------------------------------------------------------------------------
 // Pricing Table Columns
@@ -32,48 +52,7 @@ export interface PricingColumnsOptions {
   priceRate?: number
   usdExchangeRate?: number
   showRechargePrice?: boolean
-}
-
-function renderLimitedTags(
-  items: string[],
-  maxDisplay: number = 3
-): React.ReactNode {
-  if (items.length === 0)
-    return <span className='text-muted-foreground/50 text-xs'>—</span>
-
-  const displayed = items.slice(0, maxDisplay)
-  const remaining = items.length - maxDisplay
-
-  return (
-    <span className='text-muted-foreground text-xs'>
-      {displayed.join(', ')}
-      {remaining > 0 && (
-        <span className='text-muted-foreground/50'> +{remaining}</span>
-      )}
-    </span>
-  )
-}
-
-function renderLimitedGroupBadges(
-  groups: string[],
-  maxDisplay: number = 2
-): React.ReactNode {
-  if (groups.length === 0)
-    return <span className='text-muted-foreground/50 text-xs'>—</span>
-
-  const displayed = groups.slice(0, maxDisplay)
-  const remaining = groups.length - maxDisplay
-
-  return (
-    <div className='flex max-w-full items-center gap-1 overflow-hidden'>
-      {displayed.map((group) => (
-        <GroupBadge key={group} group={group} size='sm' />
-      ))}
-      {remaining > 0 && (
-        <span className='text-muted-foreground/50 text-xs'>+{remaining}</span>
-      )}
-    </div>
-  )
+  selectedGroup?: string
 }
 
 export function usePricingColumns(
@@ -85,6 +64,7 @@ export function usePricingColumns(
     priceRate = 1,
     usdExchangeRate = 1,
     showRechargePrice = false,
+    selectedGroup,
   } = options
 
   const tokenUnitLabel = tokenUnit === 'K' ? '1K' : '1M'
@@ -99,13 +79,12 @@ export function usePricingColumns(
       ),
       cell: ({ row }) => {
         const model = row.original
-        const vendorIcon = model.vendor_icon
-          ? getLobeIcon(model.vendor_icon, 14)
-          : null
+        const modelIconKey = model.icon || model.vendor_icon
+        const modelIcon = modelIconKey ? getLobeIcon(modelIconKey, 14) : null
 
         return (
-          <div className='flex min-w-[200px] items-center gap-2'>
-            {vendorIcon}
+          <div className='flex max-w-full min-w-0 items-center gap-2'>
+            {modelIcon}
             <span className='truncate font-mono text-sm font-medium'>
               {model.model_name}
             </span>
@@ -118,17 +97,11 @@ export function usePricingColumns(
     // Type column
     {
       accessorKey: 'quota_type',
-      meta: { label: t('Type') },
       header: t('Type'),
-      cell: ({ row }) => {
-        const isTokenBased = row.original.quota_type === QUOTA_TYPE_VALUES.TOKEN
-        return (
-          <span className='text-muted-foreground text-xs font-medium tracking-wider uppercase'>
-            {isTokenBased ? t('Token') : t('Request')}
-          </span>
-        )
-      },
-      size: 80,
+      cell: ({ row }) => (
+        <ModelBillingModeBadge model={row.original} className='-ml-1.5' />
+      ),
+      size: 110,
       enableSorting: false,
     },
 
@@ -146,13 +119,16 @@ export function usePricingColumns(
           showRechargePrice,
           priceRate,
           usdExchangeRate,
-          groupRatioMultiplier: getDynamicDisplayGroupRatio(model),
+          groupRatioMultiplier: getDynamicDisplayGroupRatio(
+            model,
+            selectedGroup
+          ),
         })
 
         if (dynamicSummary) {
           if (dynamicSummary.isSpecialExpression) {
             return (
-              <div className='max-w-[320px] min-w-[200px]'>
+              <div className='max-w-full min-w-0'>
                 <div className='text-xs font-medium text-amber-700 dark:text-amber-300'>
                   {t('Special billing expression')}
                 </div>
@@ -176,7 +152,7 @@ export function usePricingColumns(
           }
 
           return (
-            <div className='min-w-[180px]'>
+            <div className='max-w-full min-w-0'>
               <span className='font-mono text-sm tabular-nums'>
                 {primaryEntries.map((entry, index) => (
                   <span key={entry.key}>
@@ -208,7 +184,8 @@ export function usePricingColumns(
               tokenUnit,
               showRechargePrice,
               priceRate,
-              usdExchangeRate
+              usdExchangeRate,
+              selectedGroup
             )
           )
           const outputPrice = stripTrailingZeros(
@@ -218,12 +195,13 @@ export function usePricingColumns(
               tokenUnit,
               showRechargePrice,
               priceRate,
-              usdExchangeRate
+              usdExchangeRate,
+              selectedGroup
             )
           )
 
           return (
-            <div className='min-w-[160px]'>
+            <div className='max-w-full min-w-0'>
               <span className='font-mono text-sm tabular-nums'>
                 {inputPrice}
                 <span className='text-muted-foreground/40 mx-1'>/</span>
@@ -241,12 +219,13 @@ export function usePricingColumns(
             model,
             showRechargePrice,
             priceRate,
-            usdExchangeRate
+            usdExchangeRate,
+            selectedGroup
           )
         )
 
         return (
-          <div className='min-w-[100px]'>
+          <div className='max-w-full min-w-0'>
             <span className='font-mono text-sm tabular-nums'>{price}</span>
             <div className='text-muted-foreground/50 text-[10px]'>
               / {t('request')}
@@ -261,7 +240,6 @@ export function usePricingColumns(
     // Cached price column (Vercel AI Gateway style)
     {
       id: 'cached_price',
-      meta: { label: t('Cached') },
       header: t('Cached'),
       cell: ({ row }) => {
         const model = row.original
@@ -270,7 +248,10 @@ export function usePricingColumns(
           showRechargePrice,
           priceRate,
           usdExchangeRate,
-          groupRatioMultiplier: getDynamicDisplayGroupRatio(model),
+          groupRatioMultiplier: getDynamicDisplayGroupRatio(
+            model,
+            selectedGroup
+          ),
         })
 
         if (dynamicSummary) {
@@ -290,7 +271,7 @@ export function usePricingColumns(
           }
 
           return (
-            <div className='min-w-[80px]'>
+            <div className='max-w-full min-w-0'>
               <span className='font-mono text-sm tabular-nums'>
                 {stripTrailingZeros(cacheEntry.formatted)}
               </span>
@@ -314,12 +295,13 @@ export function usePricingColumns(
             tokenUnit,
             showRechargePrice,
             priceRate,
-            usdExchangeRate
+            usdExchangeRate,
+            selectedGroup
           )
         )
 
         return (
-          <div className='min-w-[80px]'>
+          <div className='max-w-full min-w-0'>
             <span className='font-mono text-sm tabular-nums'>
               {cachedPrice}
             </span>
@@ -336,7 +318,6 @@ export function usePricingColumns(
     // Vendor column
     {
       accessorKey: 'vendor_name',
-      meta: { label: t('Vendor') },
       header: t('Vendor'),
       cell: ({ row }) => {
         const model = row.original
@@ -347,10 +328,15 @@ export function usePricingColumns(
           ? getLobeIcon(model.vendor_icon, 12)
           : null
         return (
-          <span className='text-muted-foreground flex items-center gap-1.5 text-xs'>
+          <BadgeCell className='gap-1.5'>
             {vendorIcon}
-            {model.vendor_name}
-          </span>
+            <StatusBadge
+              label={model.vendor_name}
+              autoColor={model.vendor_name}
+              size='sm'
+              copyable={false}
+            />
+          </BadgeCell>
         )
       },
       size: 130,
@@ -360,27 +346,21 @@ export function usePricingColumns(
     // Tags column
     {
       accessorKey: 'tags',
-      meta: { label: t('Tags') },
       header: t('Tags'),
       cell: ({ row }) => {
         const tags = parseTags(row.original.tags)
-        if (tags.length === 0) {
-          return <span className='text-muted-foreground/50 text-xs'>—</span>
-        }
-
         return (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger render={<div />}>
-                {renderLimitedTags(tags, 2)}
-              </TooltipTrigger>
-              {tags.length > 2 && (
-                <TooltipContent side='top' className='max-w-[280px] p-2'>
-                  <span className='text-xs'>{tags.join(', ')}</span>
-                </TooltipContent>
-              )}
-            </Tooltip>
-          </TooltipProvider>
+          <BadgeListCell
+            items={tags.map((tag) => (
+              <StatusBadge
+                key={tag}
+                label={tag}
+                autoColor={tag}
+                size='sm'
+                copyable={false}
+              />
+            ))}
+          />
         )
       },
       size: 140,
@@ -390,27 +370,21 @@ export function usePricingColumns(
     // Endpoints column
     {
       accessorKey: 'supported_endpoint_types',
-      meta: { label: t('Endpoints') },
       header: t('Endpoints'),
       cell: ({ row }) => {
         const endpoints = row.original.supported_endpoint_types || []
-        if (endpoints.length === 0) {
-          return <span className='text-muted-foreground/50 text-xs'>—</span>
-        }
-
         return (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger render={<div />}>
-                {renderLimitedTags(endpoints, 2)}
-              </TooltipTrigger>
-              {endpoints.length > 2 && (
-                <TooltipContent side='top' className='max-w-[280px] p-2'>
-                  <span className='text-xs'>{endpoints.join(', ')}</span>
-                </TooltipContent>
-              )}
-            </Tooltip>
-          </TooltipProvider>
+          <BadgeListCell
+            items={endpoints.map((ep) => (
+              <StatusBadge
+                key={ep}
+                label={ep}
+                autoColor={ep}
+                size='sm'
+                copyable={false}
+              />
+            ))}
+          />
         )
       },
       size: 130,
@@ -420,31 +394,16 @@ export function usePricingColumns(
     // Enable Groups column
     {
       accessorKey: 'enable_groups',
-      meta: { label: t('Groups') },
       header: t('Groups'),
       cell: ({ row }) => {
         const groups = row.original.enable_groups || []
-        if (groups.length === 0) {
-          return <span className='text-muted-foreground/50 text-xs'>—</span>
-        }
-
         return (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger render={<div />}>
-                {renderLimitedGroupBadges(groups, 2)}
-              </TooltipTrigger>
-              {groups.length > 2 && (
-                <TooltipContent side='top' className='max-w-[280px] p-2'>
-                  <div className='flex flex-wrap gap-1'>
-                    {groups.map((group) => (
-                      <GroupBadge key={group} group={group} size='sm' />
-                    ))}
-                  </div>
-                </TooltipContent>
-              )}
-            </Tooltip>
-          </TooltipProvider>
+          <BadgeListCell
+            items={groups.map((group) => (
+              <GroupBadge key={group} group={group} size='sm' />
+            ))}
+            tooltipClassName='max-w-[280px] p-2'
+          />
         )
       },
       size: 130,

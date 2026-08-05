@@ -1,9 +1,30 @@
-import { useEffect } from 'react'
-import * as z from 'zod'
-import { useForm } from 'react-hook-form'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useEffect } from 'react'
+import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import * as z from 'zod'
+
+import { JsonCodeEditor } from '@/components/json-code-editor'
+import { StatusBadge } from '@/components/status-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -18,8 +39,13 @@ import {
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
-import { StatusBadge } from '@/components/status-badge'
+
+import {
+  SettingsForm,
+  SettingsSwitchContent,
+  SettingsSwitchItem,
+} from '../components/settings-form-layout'
+import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -131,21 +157,6 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
 
   const pingEnabled = form.watch('general_setting.ping_interval_enabled')
 
-  const formatJsonField = (
-    field:
-      | 'global.thinking_model_blacklist'
-      | 'global.chat_completions_to_responses_policy'
-  ) => {
-    const raw = form.getValues(field)
-    if (!raw || !raw.trim()) return
-    try {
-      const formatted = JSON.stringify(JSON.parse(raw), null, 2)
-      form.setValue(field, formatted, { shouldDirty: true })
-    } catch {
-      toast.error(t('Invalid JSON format'))
-    }
-  }
-
   const onSubmit = async (values: GlobalModelSettingsFormValues) => {
     const flattenedDefaults = flattenGlobalValues(defaultValues)
     const flattenedValues = flattenGlobalValues(values)
@@ -168,36 +179,33 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
   }
 
   return (
-    <SettingsSection
-      title={t('Global Model Configuration')}
-      description={t(
-        'Control passthrough behavior and connection keep-alive settings'
-      )}
-    >
+    <SettingsSection title={t('Global Model Configuration')}>
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-6'>
+        <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
+          <SettingsPageFormActions
+            onSave={form.handleSubmit(onSubmit)}
+            isSaving={updateOption.isPending}
+          />
           <FormField
             control={form.control}
             name='global.pass_through_request_enabled'
             render={({ field }) => (
-              <FormItem className='flex flex-row items-center justify-between rounded-lg border p-4'>
-                <div className='space-y-0.5'>
-                  <FormLabel className='text-base'>
-                    {t('Enable Request Passthrough')}
-                  </FormLabel>
+              <SettingsSwitchItem>
+                <SettingsSwitchContent>
+                  <FormLabel>{t('Enable Request Passthrough')}</FormLabel>
                   <FormDescription>
                     {t(
                       'Forward requests directly to upstream providers without any post-processing.'
                     )}
                   </FormDescription>
-                </div>
+                </SettingsSwitchContent>
                 <FormControl>
                   <Switch
                     checked={field.value}
                     onCheckedChange={field.onChange}
                   />
                 </FormControl>
-              </FormItem>
+              </SettingsSwitchItem>
             )}
           />
 
@@ -206,13 +214,18 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
             name='global.thinking_model_blacklist'
             render={({ field }) => (
               <FormItem>
-                <FormLabel>{t('Disable thinking processing models')}</FormLabel>
+                <FormLabel>
+                  {t('Models that skip thinking suffix processing')}
+                </FormLabel>
                 <FormControl>
-                  <Textarea
-                    rows={4}
+                  <JsonCodeEditor
+                    value={field.value}
+                    onChange={(value) => field.onChange(value)}
+                    name={field.name}
+                    onBlur={field.onBlur}
+                    textareaRef={field.ref}
                     placeholder={`${t('Example:')}\n${thinkingBlacklistExample}`}
-                    {...field}
-                    onChange={(event) => field.onChange(event.target.value)}
+                    heightClassName='h-32 min-h-32 max-h-32'
                   />
                 </FormControl>
                 <FormDescription>
@@ -220,18 +233,6 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                     'Models listed here will not automatically append or remove -thinking / -nothinking suffixes.'
                   )}
                 </FormDescription>
-                <div className='flex flex-wrap gap-2'>
-                  <Button
-                    type='button'
-                    variant='outline'
-                    size='sm'
-                    onClick={() =>
-                      formatJsonField('global.thinking_model_blacklist')
-                    }
-                  >
-                    {t('Format JSON')}
-                  </Button>
-                </div>
                 <FormMessage />
               </FormItem>
             )}
@@ -267,11 +268,13 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                 <FormItem>
                   <FormLabel>{t('Policy JSON')}</FormLabel>
                   <FormControl>
-                    <Textarea
-                      rows={8}
+                    <JsonCodeEditor
+                      value={field.value}
+                      onChange={(value) => field.onChange(value)}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      textareaRef={field.ref}
                       placeholder={`${t('Example (specific channels):')}\n${chatToResponsesPolicyExample}\n\n${t('Example (all channels):')}\n${chatToResponsesPolicyAllChannelsExample}`}
-                      {...field}
-                      onChange={(event) => field.onChange(event.target.value)}
                     />
                   </FormControl>
                   <FormDescription>
@@ -306,18 +309,6 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                     >
                       {t('Fill example (all channels)')}
                     </Button>
-                    <Button
-                      type='button'
-                      variant='outline'
-                      size='sm'
-                      onClick={() =>
-                        formatJsonField(
-                          'global.chat_completions_to_responses_policy'
-                        )
-                      }
-                    >
-                      {t('Format JSON')}
-                    </Button>
                   </div>
                   <FormMessage />
                 </FormItem>
@@ -331,24 +322,22 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
             control={form.control}
             name='general_setting.ping_interval_enabled'
             render={({ field }) => (
-              <FormItem className='flex flex-row items-center justify-between rounded-lg border p-4'>
-                <div className='space-y-0.5'>
-                  <FormLabel className='text-base'>
-                    {t('Keep-alive Ping')}
-                  </FormLabel>
+              <SettingsSwitchItem>
+                <SettingsSwitchContent>
+                  <FormLabel>{t('Keep-alive Ping')}</FormLabel>
                   <FormDescription>
                     {t(
                       'Periodically send ping frames to keep streaming connections active.'
                     )}
                   </FormDescription>
-                </div>
+                </SettingsSwitchContent>
                 <FormControl>
                   <Switch
                     checked={field.value}
                     onCheckedChange={field.onChange}
                   />
                 </FormControl>
-              </FormItem>
+              </SettingsSwitchItem>
             )}
           />
 
@@ -384,11 +373,7 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
               </FormItem>
             )}
           />
-
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending ? t('Saving...') : t('Save Changes')}
-          </Button>
-        </form>
+        </SettingsForm>
       </Form>
     </SettingsSection>
   )

@@ -1,10 +1,28 @@
-import { useState, useEffect } from 'react'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { Code, Table, Plus, Trash2 } from 'lucide-react'
+import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
+
+import { JsonCodeEditor } from '@/components/json-code-editor'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 
 type JsonEditorProps = {
   value: string
@@ -23,6 +41,23 @@ type EditorRow = {
   id: string
   key: string
   value: string
+}
+
+function parseJsonRows(json: string): EditorRow[] {
+  try {
+    if (!json.trim()) return []
+    const parsed = JSON.parse(json)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return []
+    }
+    return Object.entries(parsed).map(([key, val], index) => ({
+      id: `${Date.now()}-${index}`,
+      key,
+      value: typeof val === 'object' ? JSON.stringify(val) : String(val),
+    }))
+  } catch {
+    return []
+  }
 }
 
 export function JsonEditor({
@@ -45,27 +80,11 @@ export function JsonEditor({
   const resolvedKeyLabel = keyLabel ?? t('Key')
   const resolvedValueLabel = valueLabel ?? t('Value')
   const [mode, setMode] = useState<'visual' | 'json'>('visual')
-  const [rows, setRows] = useState<EditorRow[]>([])
+  const [rows, setRows] = useState<EditorRow[]>(() => parseJsonRows(value))
   const [jsonValue, setJsonValue] = useState(value)
 
   const parseJsonToRows = (json: string) => {
-    try {
-      if (!json.trim()) {
-        setRows([])
-        return
-      }
-      const parsed = JSON.parse(json)
-      const newRows: EditorRow[] = Object.entries(parsed).map(
-        ([key, val], index) => ({
-          id: `${Date.now()}-${index}`,
-          key,
-          value: typeof val === 'object' ? JSON.stringify(val) : String(val),
-        })
-      )
-      setRows(newRows)
-    } catch (_error) {
-      // Invalid JSON, keep current rows
-    }
+    setRows(parseJsonRows(json))
   }
 
   // Parse JSON to rows when value changes externally
@@ -210,7 +229,7 @@ export function JsonEditor({
               <div className='grid grid-cols-[1fr_1fr_auto] gap-2 text-sm font-medium'>
                 <div>{resolvedKeyLabel}</div>
                 <div>{resolvedValueLabel}</div>
-                <div className='w-10'></div>
+                <div className='w-10' />
               </div>
               {rows.map((row) => (
                 <div
@@ -265,15 +284,14 @@ export function JsonEditor({
           </Button>
         </div>
       ) : (
-        <Textarea
+        <JsonCodeEditor
           value={jsonValue}
-          onChange={(e) => handleJsonChange(e.target.value)}
+          onChange={handleJsonChange}
           placeholder={
             template ? JSON.stringify(template, null, 2) : '{"key": "value"}'
           }
           disabled={disabled}
-          rows={8}
-          className={cn('font-mono text-sm')}
+          ariaLabel={t('JSON')}
         />
       )}
     </div>

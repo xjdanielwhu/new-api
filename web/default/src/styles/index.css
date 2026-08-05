@@ -1,18 +1,87 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
 @import '@fontsource-variable/public-sans';
+/* Editorial serif (Lora) backing the `serif` font axis and the Anthropic
+ * preset's default typography. See `--font-serif` in theme.css for the
+ * full Latin + CJK fallback stack and `theme-presets.css` for the cascade
+ * that activates it. Loaded globally so font-switching is instantaneous
+ * with no FOUT once the variable is fetched. */
+@import '@fontsource-variable/lora';
 
 @import './theme.css';
 @import './theme-presets.css';
 
 /* Shiki dual themes: token colors follow dark theme (pre background stays `bg-background` on the block) */
 @layer components {
+  .shiki span {
+    color: var(--shiki-light) !important;
+    font-style: var(--shiki-light-font-style) !important;
+    font-weight: var(--shiki-light-font-weight) !important;
+    text-decoration: var(--shiki-light-text-decoration) !important;
+  }
+
   .dark .shiki span {
     color: var(--shiki-dark) !important;
     font-style: var(--shiki-dark-font-style) !important;
     font-weight: var(--shiki-dark-font-weight) !important;
     text-decoration: var(--shiki-dark-text-decoration) !important;
+  }
+
+  .json-code-editor-textarea {
+    overflow: auto !important;
+    scrollbar-gutter: stable;
+  }
+
+  .json-code-editor-textarea::placeholder {
+    color: var(--muted-foreground);
+    opacity: 1;
+    -webkit-text-fill-color: var(--muted-foreground);
+  }
+
+  .json-code-editor-textarea,
+  .json-code-editor-highlight,
+  .json-code-editor-lines {
+    overflow-wrap: normal !important;
+    white-space: pre !important;
+  }
+
+  .json-code-editor-highlight .yace-tok--str {
+    color: var(--chart-5);
+  }
+
+  .json-code-editor-highlight .yace-tok--num {
+    color: var(--chart-4);
+  }
+
+  .json-code-editor-highlight .yace-tok--kw {
+    color: var(--chart-1);
+  }
+
+  .json-code-editor-highlight .yace-tok--punc {
+    color: var(--muted-foreground);
+  }
+
+  .json-code-editor-highlight .yace-tok--com {
+    color: var(--muted-foreground);
   }
 }
 
@@ -25,13 +94,12 @@
   html {
     @apply overflow-x-hidden font-sans;
   }
-  .font-system {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto',
-      'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans',
-      'Helvetica Neue', sans-serif;
-  }
   body {
     @apply bg-background text-foreground has-[div[data-variant='inset']]:bg-sidebar min-h-svh w-full;
+    /* Font is driven by the theme's font axis via `--font-body`
+     * (defined in theme.css, swapped by `[data-theme-font='...']` blocks
+     * in theme-presets.css). Defaults to the project's humanist sans. */
+    font-family: var(--font-body);
   }
 
   /* Keep sticky headers stable while primitives lock body scrolling. */
@@ -121,6 +189,18 @@
   /* Hide scrollbar for IE, Edge and Firefox */
   -ms-overflow-style: none; /* IE and Edge */
   scrollbar-width: none; /* Firefox */
+}
+
+/* Tooltip content can still scroll, but should not show a distracting axis. */
+[data-slot='tooltip-content'],
+[data-slot='tooltip-content'] * {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+[data-slot='tooltip-content']::-webkit-scrollbar,
+[data-slot='tooltip-content'] *::-webkit-scrollbar {
+  display: none;
 }
 
 @utility hover-scrollbar {
@@ -442,19 +522,19 @@
 
 /* Micro-interactions — Vercel-style subtle hover/active feedback */
 @media (prefers-reduced-motion: no-preference) {
-  [data-slot='card'] {
+  [data-slot='card']:not([data-card-hover='false']) {
     transition:
       transform 150ms ease,
       box-shadow 150ms ease;
   }
 
   @media (min-width: 641px) {
-    [data-slot='card']:hover {
+    [data-slot='card']:not([data-card-hover='false']):hover {
       transform: translateY(-1px);
       box-shadow: 0 4px 12px rgb(0 0 0 / 0.06);
     }
 
-    .dark [data-slot='card']:hover {
+    .dark [data-slot='card']:not([data-card-hover='false']):hover {
       box-shadow: 0 4px 12px rgb(0 0 0 / 0.3);
     }
   }
@@ -568,5 +648,51 @@
   .terminal-demo-spin,
   .terminal-demo-pulse {
     animation: none !important;
+  }
+}
+
+/* ── Auto group flowing border ── */
+@property --auto-group-flow-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes auto-group-flow-border-travel {
+  to {
+    --auto-group-flow-angle: 360deg;
+  }
+}
+
+/* Border-only effect: the conic gradient covers the whole layer, but the
+ * two-layer mask (content-box XOR full box) keeps only a `padding`-wide
+ * ring visible, so the highlight hugs the rounded perimeter. Animating
+ * the gradient's start angle makes the bright segment travel around all
+ * four edges and corners without touching the interior. */
+.auto-group-flow-border {
+  padding: 1.5px;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--auto-group-flow-angle),
+    transparent 0deg,
+    transparent 240deg,
+    color-mix(in oklch, var(--primary) 45%, transparent) 300deg,
+    var(--primary) 342deg,
+    transparent 360deg
+  );
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: auto-group-flow-border-travel 3.2s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auto-group-flow-border {
+    display: none;
   }
 }

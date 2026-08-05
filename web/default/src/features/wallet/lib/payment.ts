@@ -1,10 +1,28 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import {
   PAYMENT_TYPES,
   DEFAULT_PRESET_MULTIPLIERS,
   DEFAULT_PAYMENT_TYPE,
   DEFAULT_MIN_TOPUP,
 } from '../constants'
-import type { PresetAmount, TopupInfo } from '../types'
+import type { PaymentMethod, PresetAmount, TopupInfo } from '../types'
 
 // ============================================================================
 // Payment Processing Functions
@@ -15,8 +33,8 @@ import type { PresetAmount, TopupInfo } from '../types'
  */
 function isSafariBrowser(): boolean {
   return (
-    navigator.userAgent.indexOf('Safari') > -1 &&
-    navigator.userAgent.indexOf('Chrome') < 1
+    navigator.userAgent.includes('Safari') &&
+    !navigator.userAgent.includes('Chrome')
   )
 }
 
@@ -58,6 +76,13 @@ export function isStripePayment(paymentType: string): boolean {
 }
 
 /**
+ * Check if payment method is Waffo
+ */
+export function isWaffoPayment(paymentType: string): boolean {
+  return paymentType === PAYMENT_TYPES.WAFFO
+}
+
+/**
  * Check if payment method is Waffo Pancake
  *
  * Pancake is a metered-style payment that goes through a dedicated checkout
@@ -66,6 +91,32 @@ export function isStripePayment(paymentType: string): boolean {
  */
 export function isWaffoPancakePayment(paymentType: string): boolean {
   return paymentType === PAYMENT_TYPES.WAFFO_PANCAKE
+}
+
+export interface PaymentProcessors {
+  regular: (topupAmount: number, paymentType: string) => Promise<boolean>
+  waffo: (topupAmount: number, payMethodIndex: number) => Promise<boolean>
+  waffoPancake: (topupAmount: number) => Promise<boolean>
+}
+
+export async function dispatchSelectedPayment(
+  paymentMethod: PaymentMethod,
+  topupAmount: number,
+  waffoMethodIndex: number | null,
+  processors: PaymentProcessors
+): Promise<boolean> {
+  if (isWaffoPayment(paymentMethod.type)) {
+    if (waffoMethodIndex === null) {
+      return false
+    }
+    return processors.waffo(topupAmount, waffoMethodIndex)
+  }
+
+  if (isWaffoPancakePayment(paymentMethod.type)) {
+    return processors.waffoPancake(topupAmount)
+  }
+
+  return processors.regular(topupAmount, paymentMethod.type)
 }
 
 /**

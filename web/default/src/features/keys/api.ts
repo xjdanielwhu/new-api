@@ -1,4 +1,23 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { api } from '@/lib/api'
+
 import type {
   ApiKey,
   ApiResponse,
@@ -6,6 +25,7 @@ import type {
   GetApiKeysResponse,
   SearchApiKeysParams,
   ApiKeyFormData,
+  TokenAutoGroupsConfig,
 } from './types'
 
 // ============================================================================
@@ -24,7 +44,7 @@ export async function getApiKeys(
 // Search API keys by keyword or token (with pagination)
 export async function searchApiKeys(
   params: SearchApiKeysParams
-): Promise<{ success: boolean; message?: string; data?: ApiKey[] }> {
+): Promise<GetApiKeysResponse> {
   const { keyword = '', token = '', p, size } = params
   const queryParams = new URLSearchParams()
   if (keyword) queryParams.set('keyword', keyword)
@@ -38,6 +58,14 @@ export async function searchApiKeys(
 // Get single API key by ID
 export async function getApiKey(id: number): Promise<ApiResponse<ApiKey>> {
   const res = await api.get(`/api/token/${id}`)
+  return res.data
+}
+
+// Get the current user's global Auto order and the per-token selection limit.
+export async function getTokenAutoGroups(): Promise<
+  ApiResponse<TokenAutoGroupsConfig>
+> {
+  const res = await api.get('/api/token/auto-groups')
   return res.data
 }
 

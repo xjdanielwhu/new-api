@@ -1,8 +1,27 @@
-import { useCallback, useMemo, useState } from 'react'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { AlertTriangle, KeyRound, Loader2, ShieldAlert } from 'lucide-react'
+import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import dayjs from '@/lib/dayjs'
+
+import { StatusBadge } from '@/components/status-badge'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,8 +41,8 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { IconBadge } from '@/components/ui/icon-badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { StatusBadge } from '@/components/status-badge'
 import { usePasskeyManagement } from '@/features/auth/passkey'
 import {
   SecureVerificationDialog,
@@ -31,6 +50,7 @@ import {
   type VerificationMethod,
   type VerificationMethods,
 } from '@/features/auth/secure-verification'
+import dayjs from '@/lib/dayjs'
 
 interface PasskeyCardProps {
   loading: boolean
@@ -97,6 +117,7 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
 
     setRestrictedMethod('2fa')
     await startVerification(register, {
+      scope: 'passkey.register',
       preferredMethod: '2fa',
       title: t('Security verification'),
       description: t(
@@ -107,11 +128,12 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
 
   const handleRemove = useCallback(async () => {
     const methods = await fetchVerificationMethods()
-    const required: VerificationMethod | null = methods.has2FA
-      ? '2fa'
-      : methods.hasPasskey
-        ? 'passkey'
-        : null
+    let required: VerificationMethod | null = null
+    if (methods.has2FA) {
+      required = '2fa'
+    } else if (methods.hasPasskey) {
+      required = 'passkey'
+    }
 
     if (!required) {
       toast.error(
@@ -130,6 +152,7 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
     setConfirmOpen(false)
     setRestrictedMethod(required)
     await startVerification(remove, {
+      scope: 'passkey.delete',
       preferredMethod: required,
       title: t('Security verification'),
       description: t(
@@ -169,7 +192,7 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
 
   if (pageLoading || loading) {
     return (
-      <Card className='gap-0 overflow-hidden py-0'>
+      <Card data-card-hover='false' className='gap-0 overflow-hidden py-0'>
         <CardHeader className='p-3 sm:p-5'>
           <Skeleton className='h-6 w-48' />
           <Skeleton className='mt-2 h-4 w-64' />
@@ -187,10 +210,28 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
       : t('Not used yet')
 
   const showUnsupportedNotice = !supported && !enabled
+  let backupStatus: {
+    label: string
+    variant: 'success' | 'warning' | 'neutral'
+  } | null = null
+
+  if (status?.backup_eligible !== undefined) {
+    backupStatus = {
+      label: t('No backup'),
+      variant: 'neutral',
+    }
+
+    if (status.backup_eligible) {
+      backupStatus = {
+        label: status.backup_state ? t('Backed up') : t('Not backed up'),
+        variant: status.backup_state ? 'success' : 'warning',
+      }
+    }
+  }
 
   return (
     <>
-      <Card className='gap-0 overflow-hidden py-0'>
+      <Card data-card-hover='false' className='gap-0 overflow-hidden py-0'>
         <CardHeader className='p-3 sm:p-5'>
           <CardTitle className='text-lg tracking-tight sm:text-xl'>
             {t('Passkey Login')}
@@ -204,9 +245,9 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
           <div className='space-y-6'>
             <div className='flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between xl:flex-col 2xl:flex-row'>
               <div className='flex items-start gap-4'>
-                <div className='bg-muted rounded-md p-2'>
-                  <KeyRound className='h-5 w-5' />
-                </div>
+                <IconBadge tone='info' size='sm'>
+                  <KeyRound />
+                </IconBadge>
                 <div className='space-y-1'>
                   <div className='flex flex-wrap items-center gap-2'>
                     <p className='font-medium'>{t('Passkey Authentication')}</p>
@@ -216,22 +257,10 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
                       showDot
                       copyable={false}
                     />
-                    {status?.backup_eligible !== undefined && (
+                    {backupStatus && (
                       <StatusBadge
-                        label={
-                          status.backup_eligible
-                            ? status.backup_state
-                              ? t('Backed up')
-                              : t('Not backed up')
-                            : t('No backup')
-                        }
-                        variant={
-                          status.backup_eligible
-                            ? status.backup_state
-                              ? 'success'
-                              : 'warning'
-                            : 'neutral'
-                        }
+                        label={backupStatus.label}
+                        variant={backupStatus.variant}
                         showDot
                         copyable={false}
                       />
@@ -292,7 +321,7 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
                         {t('Cancel')}
                       </AlertDialogCancel>
                       <AlertDialogAction
-                        className='bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                        variant='destructive'
                         disabled={removing}
                         onClick={(event) => {
                           event.preventDefault()

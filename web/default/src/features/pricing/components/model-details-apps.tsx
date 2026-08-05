@@ -1,20 +1,36 @@
-import { useMemo } from 'react'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import {
   ArrowDownRight,
   ArrowUpRight,
   ExternalLink,
   Trophy,
 } from 'lucide-react'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
+
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+  StaticDataTable,
+  staticDataTableClassNames as tableStyles,
+} from '@/components/data-table'
+import { cn } from '@/lib/utils'
+
 import {
   buildAppRankings,
   formatTokenVolume,
@@ -41,7 +57,7 @@ function RankBadge(props: { rank: number }) {
   return (
     <span
       className={cn(
-        'inline-flex size-7 shrink-0 items-center justify-center rounded-full font-mono text-xs font-bold tabular-nums',
+        'inline-flex size-7 shrink-0 items-center justify-center rounded-md font-mono text-xs font-bold tabular-nums',
         palette
       )}
     >
@@ -105,9 +121,6 @@ export function ModelDetailsApps(props: { model: PricingModel }) {
 
   const totalMonthlyTokens = apps.reduce((s, a) => s + a.monthly_tokens, 0)
   const top = apps[0]
-  const headerCellClass =
-    'text-muted-foreground py-2 text-[10px] font-medium tracking-wider uppercase'
-
   return (
     <div className='flex flex-col gap-4'>
       <div className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
@@ -147,60 +160,70 @@ export function ModelDetailsApps(props: { model: PricingModel }) {
         </div>
       </div>
 
-      <div className='overflow-x-auto rounded-lg border'>
-        <Table className='text-sm'>
-          <TableHeader>
-            <TableRow className='hover:bg-transparent'>
-              <TableHead className={cn(headerCellClass, 'w-12')}>#</TableHead>
-              <TableHead className={headerCellClass}>{t('App')}</TableHead>
-              <TableHead
-                className={cn(headerCellClass, 'hidden md:table-cell')}
-              >
-                {t('Category')}
-              </TableHead>
-              <TableHead className={`${headerCellClass} text-right`}>
-                {t('Monthly tokens')}
-              </TableHead>
-              <TableHead className={`${headerCellClass} text-right`}>
-                {t('30d change')}
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {apps.map((app) => (
-              <TableRow key={`${app.rank}-${app.name}`}>
-                <TableCell className='py-2.5'>
-                  <RankBadge rank={app.rank} />
-                </TableCell>
-                <TableCell className='py-2.5'>
-                  <div className='flex items-center gap-3'>
-                    <span className='bg-muted text-muted-foreground inline-flex size-7 shrink-0 items-center justify-center rounded-md font-bold'>
-                      {app.initial}
-                    </span>
-                    <div className='min-w-0'>
-                      <div className='text-sm font-medium'>
-                        <AppLink app={app} />
-                      </div>
-                      <p className='text-muted-foreground line-clamp-1 text-xs'>
-                        {app.description}
-                      </p>
-                    </div>
+      <StaticDataTable
+        className='rounded-lg'
+        tableClassName='text-sm'
+        headerRowClassName={tableStyles.compactHeaderRow}
+        data={apps}
+        getRowKey={(app) => `${app.rank}-${app.name}`}
+        columns={[
+          {
+            id: 'rank',
+            header: '#',
+            className: cn(tableStyles.compactHeaderCell, 'w-12'),
+            cellClassName: tableStyles.compactCell,
+            cell: (app) => <RankBadge rank={app.rank} />,
+          },
+          {
+            id: 'app',
+            header: t('App'),
+            className: tableStyles.compactHeaderCell,
+            cellClassName: tableStyles.compactCell,
+            cell: (app) => (
+              <div className='flex items-center gap-3'>
+                <span className='bg-muted text-muted-foreground inline-flex size-7 shrink-0 items-center justify-center rounded-md font-bold'>
+                  {app.initial}
+                </span>
+                <div className='min-w-0'>
+                  <div className='text-sm font-medium'>
+                    <AppLink app={app} />
                   </div>
-                </TableCell>
-                <TableCell className='text-muted-foreground hidden py-2.5 text-xs md:table-cell'>
-                  {app.category}
-                </TableCell>
-                <TableCell className='py-2.5 text-right font-mono tabular-nums'>
-                  {formatTokenVolume(app.monthly_tokens)}
-                </TableCell>
-                <TableCell className='py-2.5 text-right'>
-                  <GrowthChip value={app.growth_pct} />
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+                  <p className='text-muted-foreground line-clamp-1 text-sm'>
+                    {app.description}
+                  </p>
+                </div>
+              </div>
+            ),
+          },
+          {
+            id: 'category',
+            header: t('Category'),
+            className: cn(
+              tableStyles.compactHeaderCell,
+              'hidden md:table-cell'
+            ),
+            cellClassName: cn(
+              tableStyles.compactMutedCell,
+              'hidden md:table-cell'
+            ),
+            cell: (app) => app.category,
+          },
+          {
+            id: 'monthly-tokens',
+            header: t('Monthly tokens'),
+            className: tableStyles.compactHeaderCellRight,
+            cellClassName: cn(tableStyles.compactNumericCell, 'tabular-nums'),
+            cell: (app) => formatTokenVolume(app.monthly_tokens),
+          },
+          {
+            id: 'growth',
+            header: t('30d change'),
+            className: tableStyles.compactHeaderCellRight,
+            cellClassName: cn(tableStyles.compactCell, 'text-right'),
+            cell: (app) => <GrowthChip value={app.growth_pct} />,
+          },
+        ]}
+      />
 
       <p className='text-muted-foreground/60 text-[11px] leading-relaxed'>
         {t(

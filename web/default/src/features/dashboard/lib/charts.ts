@@ -1,12 +1,31 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { dataScheme as vchartDefaultDataScheme } from '@visactor/vchart/esm/theme/color-scheme/builtin/default'
-import { getCurrencyDisplay } from '@/lib/currency'
-import { formatChartTime, type TimeGranularity } from '@/lib/time'
+
 import { MAX_CHART_TREND_POINTS } from '@/features/dashboard/constants'
 import type {
   QuotaDataItem,
   ProcessedChartData,
   ProcessedUserChartData,
 } from '@/features/dashboard/types'
+import { getCurrencyDisplay } from '@/lib/currency'
+import { formatChartTime, type TimeGranularity } from '@/lib/time'
 
 type TFunction = (key: string) => string
 type TooltipLineItem = {
@@ -20,43 +39,15 @@ type TooltipLineItem = {
   shapeSize?: number
 }
 
-const THEME_CHART_COLOR_VARIABLES = [
-  '--chart-1',
-  '--chart-2',
-  '--chart-3',
-  '--chart-4',
-  '--chart-5',
-] as const
-
-function getThemeChartColors(themeKey?: string): string[] {
-  if (typeof document === 'undefined') return []
-  void themeKey
-
-  const bodyStyle = window.getComputedStyle(document.body)
-  const rootStyle = window.getComputedStyle(document.documentElement)
-
-  return THEME_CHART_COLOR_VARIABLES.map((name) => {
-    return (
-      bodyStyle.getPropertyValue(name) || rootStyle.getPropertyValue(name)
-    ).trim()
-  }).filter(Boolean)
-}
-
-function getVChartDefaultColors(domainLength: number, themeKey?: string) {
-  const themeColors = getThemeChartColors(themeKey)
-  if (themeColors.length > 0) {
-    return Array.from(
-      { length: Math.max(domainLength, themeColors.length) },
-      (_, index) => themeColors[index % themeColors.length]
-    )
-  }
-
+export function getDashboardChartColors(domainLength: number): string[] {
   const scheme =
     vchartDefaultDataScheme.find(
       (item) => !item.maxDomainLength || domainLength <= item.maxDomainLength
     ) ?? vchartDefaultDataScheme[vchartDefaultDataScheme.length - 1]
 
-  return scheme.scheme
+  return scheme.scheme.filter(
+    (color): color is string => typeof color === 'string'
+  )
 }
 
 function renderQuotaCompat(rawQuota: number, digits = 4): string {
@@ -80,7 +71,7 @@ export function processChartData(
   data: QuotaDataItem[],
   timeGranularity: TimeGranularity = 'day',
   t?: TFunction,
-  themeKey?: string
+  chartCornerRadius?: number
 ): ProcessedChartData {
   const tt: TFunction = t ?? ((x) => x)
   const otherLabel = tt('Other')
@@ -193,7 +184,7 @@ export function processChartData(
         legends: { visible: true, selectMode: 'single' },
       },
       spec_model_line: {
-        type: 'line',
+        type: 'area',
         data: [{ id: 'lineData', values: [] }],
         xField: 'Time',
         yField: 'Count',
@@ -271,10 +262,7 @@ export function processChartData(
   const sortedTimes = Array.from(timeModelMap.keys()).sort()
   const sortedModels = [...allModels].sort()
   const modelColorDomain = Array.from(new Set([...sortedModels, otherLabel]))
-  const modelColorRange = getVChartDefaultColors(
-    modelColorDomain.length,
-    themeKey
-  )
+  const modelColorRange = getDashboardChartColors(modelColorDomain.length)
   const otherColor = modelColorRange[modelColorDomain.indexOf(otherLabel)]
   const otherTooltipColor =
     typeof otherColor === 'string' ? otherColor : '#FF8A00'
@@ -472,7 +460,8 @@ export function processChartData(
       valueField: 'value',
       categoryField: 'type',
       pie: {
-        style: { cornerRadius: 10 },
+        style:
+          chartCornerRadius == null ? {} : { cornerRadius: chartCornerRadius },
         state: {
           hover: { outerRadius: 0.85, stroke: '#000', lineWidth: 1 },
           selected: { outerRadius: 0.85, stroke: '#000', lineWidth: 1 },
@@ -699,7 +688,7 @@ export function processChartData(
   }
 }
 
-const USER_COLOR_FALLBACKS = [
+const USER_COLORS = [
   '#5B8FF9',
   '#5AD8A6',
   '#F6BD16',
@@ -716,20 +705,11 @@ export function processUserChartData(
   data: QuotaDataItem[],
   timeGranularity: TimeGranularity = 'day',
   t?: TFunction,
-  limit = 10,
-  themeKey?: string
+  limit = 10
 ): ProcessedUserChartData {
   const tt: TFunction = t ?? ((x) => x)
   const { config } = getCurrencyDisplay()
   const quotaPerUnit = config.quotaPerUnit
-  const themeUserColors = getThemeChartColors(themeKey)
-  const userColorRange =
-    themeUserColors.length > 0
-      ? Array.from(
-          { length: Math.max(limit, themeUserColors.length) },
-          (_, index) => themeUserColors[index % themeUserColors.length]
-        )
-      : USER_COLOR_FALLBACKS
 
   const formatVal = (raw: number) => renderQuotaCompat(raw, 2)
 
@@ -747,7 +727,7 @@ export function processUserChartData(
         subtext: tt('No data available'),
       },
       legends: { visible: false },
-      color: { type: 'ordinal', range: userColorRange },
+      color: { type: 'ordinal', range: USER_COLORS },
       background: { fill: 'transparent' },
     },
     spec_user_trend: {
@@ -762,7 +742,7 @@ export function processUserChartData(
         subtext: tt('No data available'),
       },
       legends: { visible: true, selectMode: 'single' },
-      color: { type: 'ordinal', range: userColorRange },
+      color: { type: 'ordinal', range: USER_COLORS },
       point: { visible: false },
       background: { fill: 'transparent' },
     },
@@ -792,7 +772,7 @@ export function processUserChartData(
 
   const userColorMap = topUsers.reduce<Record<string, string>>(
     (acc, user, i) => {
-      acc[user] = userColorRange[i % userColorRange.length]
+      acc[user] = USER_COLORS[i % USER_COLORS.length]
       return acc
     },
     {}

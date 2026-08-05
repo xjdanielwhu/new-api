@@ -1,4 +1,22 @@
-import type { User } from '@/features/users/types'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import type { AuthBundle } from '@/stores/auth-store'
 
 // ============================================================================
 // API Payloads
@@ -12,6 +30,7 @@ export interface LoginPayload {
 
 export interface TwoFAPayload {
   code: string
+  flow_token: string
 }
 
 export interface RegisterPayload {
@@ -19,7 +38,7 @@ export interface RegisterPayload {
   password: string
   email?: string
   verification_code?: string
-  aff?: string
+  aff_code?: string
   turnstile?: string
 }
 
@@ -45,22 +64,25 @@ export interface BindEmailPayload {
 export interface LoginResponse {
   success: boolean
   message: string
-  data?: {
-    require_2fa?: boolean
-    id?: number
-  }
+  data?:
+    | AuthBundle
+    | {
+        require_2fa?: boolean
+        flow_token?: string
+        expires_at?: number
+      }
 }
 
 export interface Login2FAResponse {
   success: boolean
   message: string
-  data?: User
+  data?: AuthBundle
 }
 
-export interface ApiResponse {
+export interface ApiResponse<T = unknown> {
   success: boolean
   message: string
-  data?: unknown
+  data?: T
 }
 
 // ============================================================================
@@ -81,9 +103,11 @@ export interface SystemStatus {
     oidc_enabled?: boolean
     oidc_authorization_endpoint?: string
     oidc_client_id?: string
+    oidc_display_name?: string
     linuxdo_oauth?: boolean
     linuxdo_client_id?: string
     telegram_oauth?: boolean
+    telegram_bot_name?: string
     passkey_login?: boolean
     wechat_login?: boolean
     wechat_qrcode?: string
@@ -108,6 +132,7 @@ export interface SystemStatus {
     privacy_policy_enabled?: boolean
     oauth_register_enabled?: boolean
     register_enabled?: boolean
+    password_login_enabled?: boolean
     password_register_enabled?: boolean
     custom_oauth_providers?: CustomOAuthProviderInfo[]
     [key: string]: unknown
@@ -123,9 +148,11 @@ export interface SystemStatus {
   oidc_enabled?: boolean
   oidc_authorization_endpoint?: string
   oidc_client_id?: string
+  oidc_display_name?: string
   linuxdo_oauth?: boolean
   linuxdo_client_id?: string
   telegram_oauth?: boolean
+  telegram_bot_name?: string
   passkey_login?: boolean
   wechat_login?: boolean
   wechat_qrcode?: string
@@ -150,6 +177,7 @@ export interface SystemStatus {
   privacy_policy_enabled?: boolean
   oauth_register_enabled?: boolean
   register_enabled?: boolean
+  password_login_enabled?: boolean
   password_register_enabled?: boolean
   custom_oauth_providers?: CustomOAuthProviderInfo[]
   [key: string]: unknown

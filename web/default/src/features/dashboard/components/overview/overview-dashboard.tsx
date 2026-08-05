@@ -1,4 +1,21 @@
-import { useMemo, useState } from 'react'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -8,11 +25,11 @@ import {
   ChevronDown,
   ChevronUp,
   Circle,
+  Copy,
   CreditCard,
   FileText,
   KeyRound,
   ListChecks,
-  Play,
   RadioTower,
   ShieldCheck,
   TerminalSquare,
@@ -20,24 +37,33 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useAuthStore } from '@/stores/auth-store'
-import { getUserModels } from '@/lib/api'
-import { MOTION_TRANSITION } from '@/lib/motion'
-import { ROLE } from '@/lib/roles'
-import { cn } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
-import { CopyButton } from '@/components/copy-button'
+import { toast } from 'sonner'
+
 import {
   CardStaggerContainer,
   CardStaggerItem,
 } from '@/components/page-transition'
+import { Button } from '@/components/ui/button'
+import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { fetchTokenKey, getApiKeys } from '@/features/keys/api'
 import type { ApiKey } from '@/features/keys/types'
-import { useApiInfo } from '../../hooks/use-status-data'
+import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+import { getUserModels } from '@/lib/api'
+import { MOTION_TRANSITION } from '@/lib/motion'
+import { ROLE } from '@/lib/roles'
+import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
+
+import {
+  useApiInfo,
+  useDashboardContentVisibility,
+} from '../../hooks/use-status-data'
 import { AnnouncementsPanel } from './announcements-panel'
 import { ApiInfoPanel } from './api-info-panel'
 import { FAQPanel } from './faq-panel'
+import { PerformanceHealthPanel } from './performance-health-panel'
 import { SummaryCards } from './summary-cards'
 import { UptimePanel } from './uptime-panel'
 
@@ -83,8 +109,8 @@ interface RequestExample {
   endpoint: string
   model: string
   keyName: string
+  keyId?: number
   displayKey: string
-  curl: string
   ready: boolean
 }
 
@@ -92,6 +118,7 @@ interface HeroSignal {
   label: string
   value: string
   icon: LucideIcon
+  tone: IconBadgeTone
 }
 
 function getSavedSetupGuideExpanded(): boolean | null {
@@ -158,7 +185,7 @@ function SetupGuideBackdrop(props: { compact?: boolean }) {
     <>
       <div
         className={cn(
-          'pointer-events-none absolute inset-0 bg-[linear-gradient(112deg,oklch(0.97_0.04_250/.92)_0%,oklch(0.95_0.08_315/.82)_38%,oklch(0.96_0.12_92/.78)_74%,oklch(0.94_0.1_132/.62)_100%)] dark:opacity-25',
+          'pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_48%_120%_at_78%_0%,color-mix(in_oklch,var(--overview-accent-1)_14%,transparent)_0%,transparent_62%),linear-gradient(112deg,color-mix(in_oklch,var(--card)_94%,var(--overview-accent-2)_6%)_0%,color-mix(in_oklch,var(--card)_94%,var(--overview-accent-3)_6%)_48%,color-mix(in_oklch,var(--background)_90%,var(--overview-accent-1)_10%)_100%)] dark:opacity-60',
           props.compact
             ? '[mask-image:linear-gradient(90deg,black_0%,black_48%,transparent_74%)] opacity-55'
             : 'opacity-85'
@@ -167,7 +194,7 @@ function SetupGuideBackdrop(props: { compact?: boolean }) {
       />
       <div
         className={cn(
-          'pointer-events-none absolute inset-y-0 right-0 hidden overflow-hidden font-mono text-lime-100/75 sm:block dark:text-lime-200/25',
+          'text-foreground/5 dark:text-foreground/8 pointer-events-none absolute inset-y-0 right-0 hidden overflow-hidden font-mono sm:block',
           props.compact ? 'w-1/2 opacity-45' : 'w-[58%] opacity-75'
         )}
         aria-hidden='true'
@@ -209,7 +236,7 @@ function StartStepItem(props: {
       )}
       <span
         className={cn(
-          'bg-background relative z-10 flex size-8 shrink-0 items-center justify-center rounded-full border shadow-xs',
+          'bg-background relative z-10 flex size-8 shrink-0 items-center justify-center rounded-lg border shadow-xs',
           props.step.completed && 'border-success/30 bg-success/10'
         )}
       >
@@ -254,12 +281,41 @@ function RequestPreview(props: {
 }) {
   const { t } = useTranslation()
   const shouldReduceMotion = useReducedMotion()
-  const previewLines = props.example.curl.split('\n').map((line) => {
-    if (line.includes('Authorization: Bearer')) {
-      return `  -H "Authorization: Bearer ${props.example.displayKey}" \\`
-    }
-    return line
+  const [isCopying, setIsCopying] = useState(false)
+  const { copyToClipboard } = useCopyToClipboard({ notify: false })
+  const previewCurl = buildCurlCommand({
+    endpoint: props.example.endpoint,
+    apiKey: props.example.displayKey,
+    model: props.example.model,
   })
+  const previewLines = previewCurl.split('\n')
+  const handleCopyRequest = async () => {
+    if (!props.example.keyId || isCopying) return
+
+    setIsCopying(true)
+    try {
+      const result = await fetchTokenKey(props.example.keyId)
+      const key = result.success && result.data?.key ? result.data.key : ''
+      if (!key) {
+        toast.error(result.message || t('Failed to copy to clipboard'))
+        return
+      }
+
+      const realCurl = buildCurlCommand({
+        endpoint: props.example.endpoint,
+        apiKey: `sk-${key}`,
+        model: props.example.model,
+      })
+      const copied = await copyToClipboard(realCurl)
+      if (copied) {
+        toast.success(t('Copied to clipboard'))
+      } else {
+        toast.error(t('Failed to copy to clipboard'))
+      }
+    } finally {
+      setIsCopying(false)
+    }
+  }
 
   return (
     <motion.div
@@ -279,9 +335,9 @@ function RequestPreview(props: {
 
       <div className='flex items-center justify-between gap-3 border-b pb-3'>
         <div className='flex min-w-0 items-center gap-2'>
-          <span className='bg-muted flex size-8 shrink-0 items-center justify-center rounded-lg'>
-            <TerminalSquare className='size-4' aria-hidden='true' />
-          </span>
+          <IconBadge tone='info'>
+            <TerminalSquare />
+          </IconBadge>
           <div className='min-w-0'>
             <div className='truncate text-sm font-medium'>
               {t('First API request')}
@@ -294,17 +350,17 @@ function RequestPreview(props: {
           </div>
         </div>
         {props.example.ready ? (
-          <CopyButton
-            value={props.example.curl}
+          <Button
             variant='outline'
             size='sm'
             className='h-7 gap-1.5 px-2 text-xs'
-            tooltip={t('Copy ready-to-run curl')}
-            successTooltip={t('Copied!')}
+            disabled={isCopying}
+            onClick={handleCopyRequest}
             aria-label={t('Copy ready-to-run curl')}
           >
-            {t('Copy')}
-          </CopyButton>
+            <Copy data-icon='inline-start' />
+            {isCopying ? t('Loading') : t('Copy')}
+          </Button>
         ) : (
           <Button size='sm' variant='outline' render={<Link to='/keys' />}>
             {t('Create API Key')}
@@ -319,9 +375,9 @@ function RequestPreview(props: {
           <span className='bg-success size-2 rounded-full' />
         </div>
         <div className='flex flex-col gap-1 overflow-hidden'>
-          {previewLines.map((line, index) => (
+          {previewLines.map((line) => (
             <code
-              key={`${line}-${index}`}
+              key={line}
               className='text-muted-foreground truncate'
               title={line}
             >
@@ -341,10 +397,9 @@ function RequestPreview(props: {
               className='bg-muted/40 flex items-center justify-between gap-3 rounded-xl px-3 py-2'
             >
               <span className='flex min-w-0 items-center gap-2'>
-                <Icon
-                  className='text-muted-foreground size-3.5 shrink-0'
-                  aria-hidden='true'
-                />
+                <IconBadge tone={signal.tone} size='xs'>
+                  <Icon />
+                </IconBadge>
                 <span className='truncate text-xs font-medium'>
                   {signal.label}
                 </span>
@@ -404,6 +459,12 @@ export function OverviewDashboard() {
   const { t } = useTranslation()
   const user = useAuthStore((state) => state.auth.user)
   const { items: apiInfoItems } = useApiInfo()
+  const {
+    apiInfo: showApiInfoPanel,
+    announcements: showAnnouncementsPanel,
+    faq: showFAQPanel,
+    uptimeKuma: showUptimePanel,
+  } = useDashboardContentVisibility()
   const [manualSetupGuideExpanded, setManualSetupGuideExpanded] = useState<
     boolean | null
   >(() => getSavedSetupGuideExpanded())
@@ -436,17 +497,6 @@ export function OverviewDashboard() {
     [apiKeysQuery.data]
   )
 
-  const realKeyQuery = useQuery({
-    queryKey: ['dashboard', 'overview', 'token-key', preferredKey?.id],
-    queryFn: async () => {
-      if (!preferredKey?.id) return ''
-      const result = await fetchTokenKey(preferredKey.id)
-      return result.success && result.data?.key ? `sk-${result.data.key}` : ''
-    },
-    enabled: Boolean(preferredKey?.id),
-    staleTime: 5 * 60 * 1000,
-  })
-
   const startSteps = useMemo<StartStep[]>(
     () => [
       {
@@ -477,10 +527,10 @@ export function OverviewDashboard() {
   const quickActions = useMemo<QuickAction[]>(
     () => [
       {
-        title: t('Playground'),
-        description: t('Test models and prompts from the browser'),
-        to: '/playground',
-        icon: Play,
+        title: t('API Keys'),
+        description: t('Create a key for your app or service'),
+        to: '/keys',
+        icon: KeyRound,
       },
       {
         title: t('Channels'),
@@ -516,16 +566,19 @@ export function OverviewDashboard() {
         label: t('Route active'),
         value: apiInfoItems.length > 0 ? t('Online') : t('Current domain'),
         icon: RadioTower,
+        tone: 'info',
       },
       {
         label: t('Auth configured'),
         value: preferredKey ? t('Secured') : t('Needs API key'),
         icon: ShieldCheck,
+        tone: 'success',
       },
       {
         label: t('Model selected'),
         value: modelsQuery.data?.[0] ?? t('Loading'),
         icon: Timer,
+        tone: 'chart-4',
       },
     ],
     [apiInfoItems.length, modelsQuery.data, preferredKey, t]
@@ -534,27 +587,29 @@ export function OverviewDashboard() {
   const requestExample = useMemo<RequestExample>(() => {
     const endpoint = normalizeEndpoint(apiInfoItems[0]?.url)
     const model = modelsQuery.data?.[0] ?? 'gpt-4o-mini'
-    const apiKey = realKeyQuery.data ?? ''
     const keyName = preferredKey?.name ?? t('No API key yet')
-    const ready = Boolean(apiKey && model)
+    const ready = Boolean(preferredKey?.id && model)
 
     return {
       endpoint,
       model,
       keyName,
-      displayKey: formatDisplayKey(apiKey),
+      keyId: preferredKey?.id,
+      displayKey: preferredKey
+        ? formatDisplayKey(`sk-${preferredKey.key}`)
+        : 'sk-...',
       ready,
-      curl: buildCurlCommand({
-        endpoint,
-        apiKey: apiKey || 'sk-...',
-        model,
-      }),
     }
-  }, [apiInfoItems, modelsQuery.data, preferredKey, realKeyQuery.data, t])
+  }, [apiInfoItems, modelsQuery.data, preferredKey, t])
 
   const completedStepCount = startSteps.filter((step) => step.completed).length
   const setupComplete = completedStepCount === startSteps.length
-  const setupGuideExpanded = manualSetupGuideExpanded ?? !setupComplete
+  const setupStatusReady = apiKeysQuery.isFetched && Boolean(user)
+  const setupGuideExpanded =
+    manualSetupGuideExpanded ?? (setupStatusReady && !setupComplete)
+  const showLeftContentPanels =
+    isAdmin || showApiInfoPanel || showAnnouncementsPanel || showFAQPanel
+  const showContentPanels = showLeftContentPanels || showUptimePanel
 
   const handleSetupGuideToggle = () => {
     const nextExpanded = !setupGuideExpanded
@@ -657,7 +712,7 @@ export function OverviewDashboard() {
                           ? t('Setup guide complete')
                           : t('Setup guide')}
                       </h3>
-                      <span className='text-muted-foreground bg-background/60 rounded-full border px-2 py-0.5 text-xs'>
+                      <span className='text-muted-foreground bg-background/60 rounded-md border px-2 py-0.5 text-xs'>
                         {t('Setup progress: {{completed}}/{{total}}', {
                           completed: completedStepCount,
                           total: startSteps.length,
@@ -696,22 +751,52 @@ export function OverviewDashboard() {
 
       <SummaryCards />
 
-      <CardStaggerContainer className='grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]'>
-        <div className='grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2'>
-          <CardStaggerItem>
-            <ApiInfoPanel />
-          </CardStaggerItem>
-          <CardStaggerItem>
-            <AnnouncementsPanel />
-          </CardStaggerItem>
-          <CardStaggerItem>
-            <FAQPanel />
-          </CardStaggerItem>
-        </div>
-        <CardStaggerItem>
-          <UptimePanel />
-        </CardStaggerItem>
-      </CardStaggerContainer>
+      {showContentPanels && (
+        <CardStaggerContainer
+          className={cn(
+            'grid grid-cols-1 gap-4',
+            showLeftContentPanels &&
+              showUptimePanel &&
+              'xl:grid-cols-[minmax(0,1fr)_22rem]'
+          )}
+        >
+          {showLeftContentPanels && (
+            <div
+              className={cn(
+                'grid min-w-0 grid-cols-1 gap-4',
+                (showApiInfoPanel || showAnnouncementsPanel || showFAQPanel) &&
+                  'lg:grid-cols-2'
+              )}
+            >
+              {isAdmin && (
+                <CardStaggerItem className='lg:col-span-2'>
+                  <PerformanceHealthPanel />
+                </CardStaggerItem>
+              )}
+              {showApiInfoPanel && (
+                <CardStaggerItem>
+                  <ApiInfoPanel />
+                </CardStaggerItem>
+              )}
+              {showAnnouncementsPanel && (
+                <CardStaggerItem>
+                  <AnnouncementsPanel />
+                </CardStaggerItem>
+              )}
+              {showFAQPanel && (
+                <CardStaggerItem>
+                  <FAQPanel />
+                </CardStaggerItem>
+              )}
+            </div>
+          )}
+          {showUptimePanel && (
+            <CardStaggerItem>
+              <UptimePanel />
+            </CardStaggerItem>
+          )}
+        </CardStaggerContainer>
+      )}
     </div>
   )
 }

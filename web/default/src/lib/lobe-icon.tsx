@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 /**
  * LobeHub Icon Loader
  * Dynamically load and render icons from @lobehub/icons
@@ -8,6 +26,13 @@
  * - Size parameter: getLobeIcon("OpenAI", 20)
  */
 import * as LobeIcons from '@lobehub/icons'
+import type React from 'react'
+
+import { IconSub2api } from '@/assets/custom/icon-sub2api'
+
+const CUSTOM_ICONS: Record<string, React.ComponentType<{ size?: number }>> = {
+  Sub2API: IconSub2api,
+}
 
 /**
  * Parse a property value from string to appropriate type
@@ -84,6 +109,10 @@ export function getLobeIcon(
   // Parse component path and chained properties
   const segments = trimmedName.split('.')
   const baseKey = segments[0]
+  const CustomIcon = CUSTOM_ICONS[baseKey]
+  if (CustomIcon) {
+    return <CustomIcon size={size} />
+  }
   const BaseIcon = (LobeIcons as Record<string, unknown>)[baseKey] as
     | Record<string, unknown>
     | undefined

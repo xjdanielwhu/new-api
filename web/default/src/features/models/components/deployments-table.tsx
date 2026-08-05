@@ -1,15 +1,28 @@
-import { useEffect, useMemo, useState } from 'react'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
-import {
-  getCoreRowModel,
-  useReactTable,
-  type VisibilityState,
-} from '@tanstack/react-table'
-import { useMediaQuery } from '@/hooks'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { useTableUrlState } from '@/hooks/use-table-url-state'
+
+import { DataTablePage, useDataTable } from '@/components/data-table'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,7 +33,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { DataTablePage } from '@/components/data-table'
+import { useMediaQuery } from '@/hooks'
+import { useTableUrlState } from '@/hooks/use-table-url-state'
+
 import { deleteDeployment, listDeployments, searchDeployments } from '../api'
 import { getDeploymentStatusOptions } from '../constants'
 import { deploymentsQueryKeys } from '../lib'
@@ -149,8 +164,6 @@ export function DeploymentsTable() {
     }
   }
 
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
-
   const columns = useDeploymentsColumns({
     onViewLogs: (id) => {
       setLogsDeploymentId(id)
@@ -179,29 +192,21 @@ export function DeploymentsTable() {
     },
   })
 
-  const table = useReactTable({
+  const { table } = useDataTable({
     data: deployments,
     columns,
-    pageCount: Math.ceil(totalCount / pagination.pageSize),
-    state: {
-      columnFilters,
-      columnVisibility,
-      pagination,
-      globalFilter,
-    },
+    totalCount,
+    columnFilters,
+    pagination,
+    globalFilter,
     onColumnFiltersChange,
-    onColumnVisibilityChange: setColumnVisibility,
     onPaginationChange,
     onGlobalFilterChange,
-    getCoreRowModel: getCoreRowModel(),
     manualPagination: true,
     manualFiltering: true,
+    withSortedRowModel: false,
+    ensurePageInRange,
   })
-
-  const pageCount = table.getPageCount()
-  useEffect(() => {
-    ensurePageInRange(pageCount)
-  }, [ensurePageInRange, pageCount])
 
   const statusFilterOptions = useMemo(() => {
     return [...getDeploymentStatusOptions(t)].map((opt) => ({
@@ -305,7 +310,7 @@ export function DeploymentsTable() {
             <AlertDialogAction
               onClick={handleDelete}
               disabled={isDeleting}
-              className='bg-destructive text-destructive-foreground hover:bg-destructive/90'
+              variant='destructive'
             >
               {isDeleting ? t('Deleting...') : t('Delete')}
             </AlertDialogAction>

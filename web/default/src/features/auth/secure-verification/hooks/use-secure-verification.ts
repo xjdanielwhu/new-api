@@ -1,10 +1,30 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import i18next from 'i18next'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+
 import {
   extractVerificationInfo,
   isVerificationRequiredError,
 } from '@/lib/secure-verification'
+
 import { checkVerificationMethods, verify } from '../api'
 import type {
   SecureVerificationState,
@@ -14,7 +34,7 @@ import type {
   VerificationMethods,
 } from '../types'
 
-type ApiCall = (() => Promise<unknown>) | null
+type ApiCall = ((proofToken?: string) => Promise<unknown>) | null
 
 interface InternalState extends SecureVerificationState {
   apiCall: ApiCall
@@ -61,10 +81,10 @@ export function useSecureVerification(
 
   const startVerification = useCallback(
     async (
-      apiCall: () => Promise<unknown>,
-      config: StartVerificationOptions = {}
+      apiCall: (proofToken?: string) => Promise<unknown>,
+      config: StartVerificationOptions
     ) => {
-      const { preferredMethod, title, description } = config
+      const { preferredMethod, scope, title, description } = config
       const availableMethods = await fetchVerificationMethods()
 
       if (!availableMethods.has2FA && !availableMethods.hasPasskey) {
@@ -82,6 +102,14 @@ export function useSecureVerification(
       }
 
       let defaultMethod: VerificationMethod | null = preferredMethod ?? null
+      if (
+        (defaultMethod === 'passkey' &&
+          (!availableMethods.hasPasskey ||
+            !availableMethods.passkeySupported)) ||
+        (defaultMethod === '2fa' && !availableMethods.has2FA)
+      ) {
+        defaultMethod = null
+      }
       if (!defaultMethod) {
         if (availableMethods.hasPasskey && availableMethods.passkeySupported) {
           defaultMethod = 'passkey'
@@ -94,6 +122,7 @@ export function useSecureVerification(
         ...prev,
         apiCall,
         method: defaultMethod,
+        scope,
         title,
         description,
       }))
@@ -119,8 +148,15 @@ export function useSecureVerification(
       setState((prev) => ({ ...prev, loading: true }))
 
       try {
-        await verify(actualMethod, code ?? state.code)
-        const result = await state.apiCall()
+        if (!state.scope) {
+          throw new Error(i18next.t('Verification scope is missing'))
+        }
+        const proof = await verify(
+          actualMethod,
+          state.scope,
+          code ?? state.code
+        )
+        const result = await state.apiCall(proof.proof_token)
 
         if (successMessage) {
           toast.success(successMessage)
@@ -162,8 +198,8 @@ export function useSecureVerification(
 
   const withVerification = useCallback(
     async (
-      apiCall: () => Promise<unknown>,
-      config: StartVerificationOptions = {}
+      apiCall: (proofToken?: string) => Promise<unknown>,
+      config: StartVerificationOptions
     ) => {
       try {
         return await apiCall()

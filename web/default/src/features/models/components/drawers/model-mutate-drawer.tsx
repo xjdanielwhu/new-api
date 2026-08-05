@@ -1,11 +1,40 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
-import * as z from 'zod'
-import { useForm } from 'react-hook-form'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, Loader2 } from 'lucide-react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import * as z from 'zod'
+
+import {
+  SideDrawerSection,
+  sideDrawerContentClassName,
+  sideDrawerFooterClassName,
+  sideDrawerFormClassName,
+  sideDrawerHeaderClassName,
+  sideDrawerSwitchItemClassName,
+} from '@/components/drawer-layout'
+import { JsonEditor } from '@/components/json-editor'
+import { TagInput } from '@/components/tag-input'
 import { Button } from '@/components/ui/button'
 import {
   Collapsible,
@@ -32,7 +61,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Separator } from '@/components/ui/separator'
 import {
   Sheet,
   SheetClose,
@@ -44,8 +72,6 @@ import {
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { JsonEditor } from '@/components/json-editor'
-import { TagInput } from '@/components/tag-input'
 import {
   useSystemOptions,
   getOptionValue,
@@ -54,6 +80,7 @@ import { useUpdateOption } from '@/features/system-settings/hooks/use-update-opt
 import { normalizeJsonString } from '@/features/system-settings/models/utils'
 import type { ModelSettings } from '@/features/system-settings/types'
 import { safeJsonParse } from '@/features/system-settings/utils/json-parser'
+
 import { createModel, updateModel, getModel, getVendors } from '../../api'
 import { getNameRuleOptions, ENDPOINT_TEMPLATES } from '../../constants'
 import { modelsQueryKeys, vendorsQueryKeys, parseModelTags } from '../../lib'
@@ -85,6 +112,120 @@ type ExtendedModelFormValues = z.infer<typeof extendedModelFormSchema>
 type PricingMode = 'per-token' | 'per-request'
 type PricingSubMode = 'ratio' | 'price'
 
+type PricingFields = Pick<
+  ExtendedModelFormValues,
+  | 'price'
+  | 'ratio'
+  | 'cacheRatio'
+  | 'completionRatio'
+  | 'imageRatio'
+  | 'audioRatio'
+  | 'audioCompletionRatio'
+>
+
+// Form state describing the pricing currently configured for one model name.
+type PricingConfig = {
+  mode: PricingMode
+  fields: PricingFields
+  promptPrice: string
+  completionPrice: string
+  advancedOpen: boolean
+}
+
+const EMPTY_PRICING_FIELDS: PricingFields = {
+  price: '',
+  ratio: '',
+  cacheRatio: '',
+  completionRatio: '',
+  imageRatio: '',
+  audioRatio: '',
+  audioCompletionRatio: '',
+}
+
+const EMPTY_PRICING_CONFIG: PricingConfig = {
+  mode: 'per-token',
+  fields: EMPTY_PRICING_FIELDS,
+  promptPrice: '',
+  completionPrice: '',
+  advancedOpen: false,
+}
+
+function lookupModelRatio(
+  rawMap: string,
+  modelName: string
+): number | undefined {
+  return safeJsonParse<Record<string, number>>(rawMap, {
+    fallback: {},
+    silent: true,
+  })[modelName]
+}
+
+// Pricing is not stored on the model row: it lives in system options as
+// model-name keyed JSON maps, so it has to be read back out of those maps to
+// populate the form. Both create and edit rely on this, because submit rebuilds
+// the maps from the form and would otherwise drop pricing it never loaded.
+function readPricingConfig(
+  settings: ModelSettings | null,
+  modelName: string
+): PricingConfig {
+  if (!settings || !modelName) return EMPTY_PRICING_CONFIG
+
+  const price = lookupModelRatio(settings.ModelPrice, modelName)
+  const ratio = lookupModelRatio(settings.ModelRatio, modelName)
+  const cacheRatio = lookupModelRatio(settings.CacheRatio, modelName)
+  const completionRatio = lookupModelRatio(settings.CompletionRatio, modelName)
+  const imageRatio = lookupModelRatio(settings.ImageRatio, modelName)
+  const audioRatio = lookupModelRatio(settings.AudioRatio, modelName)
+  const audioCompletionRatio = lookupModelRatio(
+    settings.AudioCompletionRatio,
+    modelName
+  )
+
+  // A fixed per-request price wins outright at billing time (see
+  // GetModelRatioOrPrice), so a name that has one is shown, and saved back, as
+  // price-only: the ratios alongside it are dead weight.
+  if (price !== undefined && price !== null) {
+    return {
+      ...EMPTY_PRICING_CONFIG,
+      mode: 'per-request',
+      fields: { ...EMPTY_PRICING_FIELDS, price: price.toString() },
+    }
+  }
+
+  let promptPrice = ''
+  let completionPrice = ''
+  if (ratio !== undefined && ratio !== null) {
+    const tokenPrice = ratio * 2
+    promptPrice = tokenPrice.toString()
+    if (completionRatio !== undefined && completionRatio !== null) {
+      completionPrice = (tokenPrice * completionRatio).toString()
+    }
+  }
+
+  return {
+    mode: 'per-token',
+    fields: {
+      price: '',
+      ratio: ratio?.toString() || '',
+      cacheRatio: cacheRatio?.toString() || '',
+      completionRatio: completionRatio?.toString() || '',
+      imageRatio: imageRatio?.toString() || '',
+      audioRatio: audioRatio?.toString() || '',
+      audioCompletionRatio: audioCompletionRatio?.toString() || '',
+    },
+    promptPrice,
+    completionPrice,
+    // Configured is not the same as non-zero: a 0 ratio (free cache reads, for
+    // instance) still has to be visible rather than hidden behind the collapse.
+    advancedOpen: [
+      cacheRatio,
+      imageRatio,
+      audioRatio,
+      audioCompletionRatio,
+    ].some((value) => value !== undefined && value !== null),
+  }
+}
+
 type ModelMutateDrawerProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -98,7 +239,8 @@ export function ModelMutateDrawer({
 }: ModelMutateDrawerProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const isEditing = Boolean(currentRow?.id)
+  const currentModelId = currentRow?.id
+  const isEditing = Boolean(currentModelId)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [pricingMode, setPricingMode] = useState<PricingMode>('per-token')
   const [pricingSubMode, setPricingSubMode] = useState<PricingSubMode>('ratio')
@@ -106,6 +248,14 @@ export function ModelMutateDrawer({
   const [promptPrice, setPromptPrice] = useState('')
   const [completionPrice, setCompletionPrice] = useState('')
   const [oldModelName, setOldModelName] = useState<string>('')
+  // Model name whose pricing was read into the form when the drawer opened.
+  // Submit may only rewrite pricing for this name, or for a name the user
+  // explicitly priced; anything else it never saw and must leave alone.
+  const [loadedPricingName, setLoadedPricingName] = useState<string>('')
+  // Keep a ref so the load effect can read the latest modelSettings without
+  // depending on it: modelSettings is a fresh object on every system-options
+  // refetch, and including it in the deps would reset the form under the user.
+  const modelSettingsRef = useRef<ModelSettings | null>(null)
 
   // Fetch vendors for dropdown
   const { data: vendorsData } = useQuery({
@@ -118,8 +268,13 @@ export function ModelMutateDrawer({
 
   // Fetch model detail if editing
   const { data: modelData } = useQuery({
-    queryKey: modelsQueryKeys.detail(currentRow?.id || 0),
-    queryFn: () => getModel(currentRow!.id),
+    queryKey: modelsQueryKeys.detail(currentModelId || 0),
+    queryFn: () => {
+      if (!currentModelId) {
+        throw new Error('Model ID is required')
+      }
+      return getModel(currentModelId)
+    },
     enabled: open && isEditing,
   })
 
@@ -164,13 +319,26 @@ export function ModelMutateDrawer({
       UserUsableGroups: '',
       GroupGroupRatio: '',
       AutoGroups: '',
+      MaxTokenAutoGroups: 5,
       DefaultUseAutoGroup: false,
       CreateCacheRatio: '',
       'group_ratio_setting.group_special_usable_group': '{}',
       'grok.violation_deduction_enabled': false,
       'grok.violation_deduction_amount': 0,
+      RetryTimes: 0,
+      ChannelDisableThreshold: '',
+      AutomaticDisableChannelEnabled: false,
+      AutomaticEnableChannelEnabled: false,
+      AutomaticDisableKeywords: '',
+      AutomaticDisableStatusCodes: '401',
+      AutomaticRetryStatusCodes:
+        '100-199,300-399,401-407,409-499,500-503,505-523,525-599',
+      'monitor_setting.auto_test_channel_enabled': false,
+      'monitor_setting.auto_test_channel_minutes': 10,
+      'monitor_setting.channel_test_mode': 'scheduled_all',
       'channel_affinity_setting.enabled': false,
       'channel_affinity_setting.switch_on_success': true,
+      'channel_affinity_setting.keep_on_channel_disabled': false,
       'channel_affinity_setting.max_entries': 100000,
       'channel_affinity_setting.default_ttl_seconds': 3600,
       'channel_affinity_setting.rules': '[]',
@@ -179,6 +347,15 @@ export function ModelMutateDrawer({
     }
     return getOptionValue(systemOptionsData.data, defaultModelSettings)
   }, [systemOptionsData])
+
+  // The load effect keys off this boolean, not the object: it re-runs once
+  // when the settings first arrive (so a drawer opened before that still gets
+  // its pricing prefilled), while later refetches only produce a new object
+  // reference and must not reset a form the user may be editing.
+  const hasModelSettings = modelSettings !== null
+  useEffect(() => {
+    modelSettingsRef.current = modelSettings
+  })
 
   const form = useForm<ExtendedModelFormValues>({
     resolver: zodResolver(extendedModelFormSchema),
@@ -204,13 +381,13 @@ export function ModelMutateDrawer({
 
   const validateNumber = (value: string) => {
     if (value === '') return true
-    return !isNaN(parseFloat(value))
+    return !Number.isNaN(Number.parseFloat(value))
   }
 
   const handlePromptPriceChange = (value: string) => {
     setPromptPrice(value)
-    if (value && !isNaN(parseFloat(value))) {
-      const ratio = parseFloat(value) / 2
+    if (value && !Number.isNaN(Number.parseFloat(value))) {
+      const ratio = Number.parseFloat(value) / 2
       form.setValue('ratio', ratio.toString())
     } else {
       form.setValue('ratio', '')
@@ -221,12 +398,13 @@ export function ModelMutateDrawer({
     setCompletionPrice(value)
     if (
       value &&
-      !isNaN(parseFloat(value)) &&
+      !Number.isNaN(Number.parseFloat(value)) &&
       promptPrice &&
-      !isNaN(parseFloat(promptPrice)) &&
-      parseFloat(promptPrice) > 0
+      !Number.isNaN(Number.parseFloat(promptPrice)) &&
+      Number.parseFloat(promptPrice) > 0
     ) {
-      const completionRatio = parseFloat(value) / parseFloat(promptPrice)
+      const completionRatio =
+        Number.parseFloat(value) / Number.parseFloat(promptPrice)
       form.setValue('completionRatio', completionRatio.toString())
     } else {
       form.setValue('completionRatio', '')
@@ -239,8 +417,16 @@ export function ModelMutateDrawer({
       const model = modelData.data
       setOldModelName(model.model_name)
 
-      // Base model data reset
-      const baseModelData = {
+      const pricing = readPricingConfig(
+        modelSettingsRef.current,
+        model.model_name
+      )
+      setLoadedPricingName(model.model_name)
+      setPricingMode(pricing.mode)
+      setPromptPrice(pricing.promptPrice)
+      setCompletionPrice(pricing.completionPrice)
+      setAdvancedOpen(pricing.advancedOpen)
+      form.reset({
         id: model.id,
         model_name: model.model_name,
         description: model.description || '',
@@ -251,102 +437,23 @@ export function ModelMutateDrawer({
         name_rule: model.name_rule || 0,
         status: model.status === 1,
         sync_official: model.sync_official === 1,
-        price: '',
-        ratio: '',
-        cacheRatio: '',
-        completionRatio: '',
-        imageRatio: '',
-        audioRatio: '',
-        audioCompletionRatio: '',
-      }
-
-      // Parse ratio configurations from system settings if available
-      if (modelSettings) {
-        const priceMap = safeJsonParse<Record<string, number>>(
-          modelSettings.ModelPrice,
-          { fallback: {}, silent: true }
-        )
-        const ratioMap = safeJsonParse<Record<string, number>>(
-          modelSettings.ModelRatio,
-          { fallback: {}, silent: true }
-        )
-        const cacheMap = safeJsonParse<Record<string, number>>(
-          modelSettings.CacheRatio,
-          { fallback: {}, silent: true }
-        )
-        const completionMap = safeJsonParse<Record<string, number>>(
-          modelSettings.CompletionRatio,
-          { fallback: {}, silent: true }
-        )
-        const imageMap = safeJsonParse<Record<string, number>>(
-          modelSettings.ImageRatio,
-          { fallback: {}, silent: true }
-        )
-        const audioMap = safeJsonParse<Record<string, number>>(
-          modelSettings.AudioRatio,
-          { fallback: {}, silent: true }
-        )
-        const audioCompletionMap = safeJsonParse<Record<string, number>>(
-          modelSettings.AudioCompletionRatio,
-          { fallback: {}, silent: true }
-        )
-
-        // Extract ratio config for this model
-        const modelName = model.model_name
-        const price = priceMap[modelName]
-        const ratio = ratioMap[modelName]
-        const cacheRatio = cacheMap[modelName]
-        const completionRatio = completionMap[modelName]
-        const imageRatio = imageMap[modelName]
-        const audioRatio = audioMap[modelName]
-        const audioCompletionRatio = audioCompletionMap[modelName]
-
-        // Determine pricing mode
-        if (price !== undefined && price !== null) {
-          setPricingMode('per-request')
-          form.reset({
-            ...baseModelData,
-            price: price.toString(),
-          })
-        } else {
-          setPricingMode('per-token')
-          if (ratio !== undefined && ratio !== null) {
-            const tokenPrice = ratio * 2
-            setPromptPrice(tokenPrice.toString())
-            if (completionRatio !== undefined && completionRatio !== null) {
-              const compPrice = tokenPrice * completionRatio
-              setCompletionPrice(compPrice.toString())
-            }
-          }
-          form.reset({
-            ...baseModelData,
-            ratio: ratio?.toString() || '',
-            cacheRatio: cacheRatio?.toString() || '',
-            completionRatio: completionRatio?.toString() || '',
-            imageRatio: imageRatio?.toString() || '',
-            audioRatio: audioRatio?.toString() || '',
-            audioCompletionRatio: audioCompletionRatio?.toString() || '',
-          })
-          setAdvancedOpen(
-            !!(cacheRatio || imageRatio || audioRatio || audioCompletionRatio)
-          )
-        }
-      } else {
-        // If system settings not loaded yet, just load base model data
-        setPricingMode('per-token')
-        form.reset(baseModelData)
-        setAdvancedOpen(false)
-      }
+        ...pricing.fields,
+      })
     } else if (open && !isEditing) {
-      // Pre-fill model name if passed from missing models
+      // Pre-fill model name if passed from missing models, along with any
+      // pricing that name already has, so the user edits it instead of being
+      // shown an empty form that hides existing configuration.
+      const modelName = currentRow?.model_name || ''
+      const pricing = readPricingConfig(modelSettingsRef.current, modelName)
       setOldModelName('')
-      setPricingMode('per-token')
+      setLoadedPricingName(modelName)
       setPricingSubMode('ratio')
-      setPromptPrice('')
-      setCompletionPrice('')
-      setAdvancedOpen(false)
+      setPricingMode(pricing.mode)
+      setPromptPrice(pricing.promptPrice)
+      setCompletionPrice(pricing.completionPrice)
+      setAdvancedOpen(pricing.advancedOpen)
       form.reset({
-        model_name: currentRow?.model_name || '',
+        model_name: modelName,
         description: '',
         icon: '',
         tags: [],
@@ -355,16 +462,10 @@ export function ModelMutateDrawer({
         name_rule: 0,
         status: true,
         sync_official: true,
-        price: '',
-        ratio: '',
-        cacheRatio: '',
-        completionRatio: '',
-        imageRatio: '',
-        audioRatio: '',
-        audioCompletionRatio: '',
+        ...pricing.fields,
       })
     }
-  }, [open, isEditing, modelData, currentRow, form, modelSettings])
+  }, [open, isEditing, modelData, currentRow, form, hasModelSettings])
 
   const onSubmit = useCallback(
     async (values: ExtendedModelFormValues): Promise<void> => {
@@ -372,7 +473,7 @@ export function ModelMutateDrawer({
       try {
         const submitData = {
           ...values,
-          id: isEditing ? currentRow!.id : undefined,
+          id: isEditing ? currentModelId : undefined,
           tags: Array.isArray(values.tags) ? values.tags.join(',') : '',
           status: values.status ? 1 : 0,
           sync_official: values.sync_official ? 1 : 0,
@@ -390,9 +491,10 @@ export function ModelMutateDrawer({
           ...modelData
         } = submitData
 
-        const response = isEditing
-          ? await updateModel({ ...modelData, id: currentRow!.id })
-          : await createModel(modelData)
+        const response =
+          isEditing && currentModelId
+            ? await updateModel({ ...modelData, id: currentModelId })
+            : await createModel(modelData)
 
         if (response.success) {
           // Handle ratio configuration updates in system settings
@@ -453,15 +555,24 @@ export function ModelMutateDrawer({
               delete audioCompletionMap[oldModelName]
             }
 
-            // Remove current model name from all maps first (always, to handle mode switches or clearing)
-            // This ensures stale entries are removed even when user clears all fields
-            delete priceMap[finalModelName]
-            delete ratioMap[finalModelName]
-            delete cacheMap[finalModelName]
-            delete completionMap[finalModelName]
-            delete imageMap[finalModelName]
-            delete audioMap[finalModelName]
-            delete audioCompletionMap[finalModelName]
+            // Rebuild this model name's entries from the form, but only when
+            // the form speaks for that name: it loaded the name's pricing when
+            // the drawer opened, so clearing every field means "remove
+            // pricing", or the user typed pricing in, which then wins outright
+            // (this is also what replaces the old entries across a mode
+            // switch). A name the form never loaded may still have pricing
+            // configured elsewhere, and an untouched pricing section must not
+            // wipe it -- that covers creating a model over an existing name,
+            // and renaming onto one.
+            if (hasRatioConfig || finalModelName === loadedPricingName) {
+              delete priceMap[finalModelName]
+              delete ratioMap[finalModelName]
+              delete cacheMap[finalModelName]
+              delete completionMap[finalModelName]
+              delete imageMap[finalModelName]
+              delete audioMap[finalModelName]
+              delete audioCompletionMap[finalModelName]
+            }
 
             // Only add new entries if user provided new configuration
             if (hasRatioConfig) {
@@ -470,30 +581,36 @@ export function ModelMutateDrawer({
                 values.price &&
                 values.price !== ''
               ) {
-                priceMap[finalModelName] = parseFloat(values.price)
+                priceMap[finalModelName] = Number.parseFloat(values.price)
               } else if (pricingMode === 'per-token') {
                 if (values.ratio && values.ratio !== '') {
-                  ratioMap[finalModelName] = parseFloat(values.ratio)
+                  ratioMap[finalModelName] = Number.parseFloat(values.ratio)
                 }
                 if (values.cacheRatio && values.cacheRatio !== '') {
-                  cacheMap[finalModelName] = parseFloat(values.cacheRatio)
+                  cacheMap[finalModelName] = Number.parseFloat(
+                    values.cacheRatio
+                  )
                 }
                 if (values.completionRatio && values.completionRatio !== '') {
-                  completionMap[finalModelName] = parseFloat(
+                  completionMap[finalModelName] = Number.parseFloat(
                     values.completionRatio
                   )
                 }
                 if (values.imageRatio && values.imageRatio !== '') {
-                  imageMap[finalModelName] = parseFloat(values.imageRatio)
+                  imageMap[finalModelName] = Number.parseFloat(
+                    values.imageRatio
+                  )
                 }
                 if (values.audioRatio && values.audioRatio !== '') {
-                  audioMap[finalModelName] = parseFloat(values.audioRatio)
+                  audioMap[finalModelName] = Number.parseFloat(
+                    values.audioRatio
+                  )
                 }
                 if (
                   values.audioCompletionRatio &&
                   values.audioCompletionRatio !== ''
                 ) {
-                  audioCompletionMap[finalModelName] = parseFloat(
+                  audioCompletionMap[finalModelName] = Number.parseFloat(
                     values.audioCompletionRatio
                   )
                 }
@@ -589,11 +706,12 @@ export function ModelMutateDrawer({
     },
     [
       isEditing,
-      currentRow,
+      currentModelId,
       queryClient,
       onOpenChange,
       pricingMode,
       oldModelName,
+      loadedPricingName,
       modelSettings,
       updateOption,
     ]
@@ -609,8 +727,8 @@ export function ModelMutateDrawer({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className='flex h-dvh w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl'>
-        <SheetHeader className='border-b px-4 py-3 text-start sm:px-6 sm:py-4'>
+      <SheetContent className={sideDrawerContentClassName('sm:max-w-2xl')}>
+        <SheetHeader className={sideDrawerHeaderClassName()}>
           <SheetTitle>
             {isEditing ? t('Edit Model') : t('Create Model')}
           </SheetTitle>
@@ -629,10 +747,10 @@ export function ModelMutateDrawer({
             onSubmit={form.handleSubmit(
               onSubmit as Parameters<typeof form.handleSubmit>[0]
             )}
-            className='flex-1 space-y-4 overflow-y-auto px-3 py-3 pb-4 sm:space-y-6 sm:px-4'
+            className={sideDrawerFormClassName()}
           >
             {/* Basic Information */}
-            <div className='space-y-4'>
+            <SideDrawerSection>
               <h3 className='text-sm font-semibold'>
                 {t('Basic Information')}
               </h3>
@@ -702,14 +820,14 @@ export function ModelMutateDrawer({
                   <FormItem>
                     <FormLabel>{t('Vendor')}</FormLabel>
                     <Select
-                      items={[
-                        ...vendors.map((vendor) => ({
-                          value: String(vendor.id),
-                          label: vendor.name,
-                        })),
-                      ]}
+                      items={vendors.map((vendor) => ({
+                        value: String(vendor.id),
+                        label: vendor.name,
+                      }))}
                       onValueChange={(value) =>
-                        field.onChange(value ? parseInt(value) : undefined)
+                        field.onChange(
+                          value ? Number.parseInt(value) : undefined
+                        )
                       }
                       value={field.value ? String(field.value) : undefined}
                     >
@@ -756,12 +874,10 @@ export function ModelMutateDrawer({
                   </FormItem>
                 )}
               />
-            </div>
-
-            <Separator />
+            </SideDrawerSection>
 
             {/* Matching Configuration */}
-            <div className='space-y-4'>
+            <SideDrawerSection>
               <h3 className='text-sm font-semibold'>{t('Matching Rules')}</h3>
 
               <FormField
@@ -773,7 +889,7 @@ export function ModelMutateDrawer({
                     <FormControl>
                       <RadioGroup
                         onValueChange={(value) =>
-                          field.onChange(parseInt(value))
+                          field.onChange(Number.parseInt(value))
                         }
                         value={String(field.value)}
                         className='grid grid-cols-2 gap-4'
@@ -804,21 +920,17 @@ export function ModelMutateDrawer({
                   </FormItem>
                 )}
               />
-            </div>
-
-            <Separator />
+            </SideDrawerSection>
 
             {/* Endpoints Configuration */}
-            <div className='space-y-4'>
+            <SideDrawerSection>
               <div className='flex items-center justify-between'>
                 <h3 className='text-sm font-semibold'>{t('Endpoints')}</h3>
                 <Select<string>
-                  items={[
-                    ...Object.keys(ENDPOINT_TEMPLATES).map((key) => ({
-                      value: key,
-                      label: key,
-                    })),
-                  ]}
+                  items={Object.keys(ENDPOINT_TEMPLATES).map((key) => ({
+                    value: key,
+                    label: key,
+                  }))}
                   onValueChange={(v) =>
                     v !== null && handleFillEndpointTemplate(v)
                   }
@@ -865,12 +977,10 @@ export function ModelMutateDrawer({
                   </FormItem>
                 )}
               />
-            </div>
-
-            <Separator />
+            </SideDrawerSection>
 
             {/* Pricing Configuration */}
-            <div className='space-y-4'>
+            <SideDrawerSection>
               <h3 className='text-sm font-semibold'>
                 {t('Pricing Configuration')}
               </h3>
@@ -971,7 +1081,9 @@ export function ModelMutateDrawer({
                                     field.onChange(value)
                                     if (value) {
                                       setPromptPrice(
-                                        (parseFloat(value) * 2).toString()
+                                        (
+                                          Number.parseFloat(value) * 2
+                                        ).toString()
                                       )
                                     } else {
                                       setPromptPrice('')
@@ -981,8 +1093,9 @@ export function ModelMutateDrawer({
                               />
                             </FormControl>
                             <FormDescription>
-                              {field.value && !isNaN(parseFloat(field.value))
-                                ? `Calculated price: $${(parseFloat(field.value) * 2).toFixed(4)} per 1M tokens`
+                              {field.value &&
+                              !Number.isNaN(Number.parseFloat(field.value))
+                                ? `Calculated price: $${(Number.parseFloat(field.value) * 2).toFixed(4)} per 1M tokens`
                                 : t('Multiplier for prompt tokens.')}
                             </FormDescription>
                             <FormMessage />
@@ -1008,9 +1121,9 @@ export function ModelMutateDrawer({
                                     const ratio = form.getValues('ratio')
                                     if (value && ratio) {
                                       const compPrice =
-                                        parseFloat(ratio) *
+                                        Number.parseFloat(ratio) *
                                         2 *
-                                        parseFloat(value)
+                                        Number.parseFloat(value)
                                       setCompletionPrice(compPrice.toString())
                                     } else {
                                       setCompletionPrice('')
@@ -1021,10 +1134,10 @@ export function ModelMutateDrawer({
                             </FormControl>
                             <FormDescription>
                               {field.value &&
-                              !isNaN(parseFloat(field.value)) &&
+                              !Number.isNaN(Number.parseFloat(field.value)) &&
                               promptPrice &&
-                              !isNaN(parseFloat(promptPrice))
-                                ? `Calculated price: $${(parseFloat(promptPrice) * parseFloat(field.value)).toFixed(4)} per 1M tokens`
+                              !Number.isNaN(Number.parseFloat(promptPrice))
+                                ? `Calculated price: $${(Number.parseFloat(promptPrice) * Number.parseFloat(field.value)).toFixed(4)} per 1M tokens`
                                 : t('Multiplier for completion tokens.')}
                             </FormDescription>
                             <FormMessage />
@@ -1033,47 +1146,46 @@ export function ModelMutateDrawer({
                       />
                     </>
                   ) : (
-                    <>
-                      <div className='space-y-4'>
-                        <div className='space-y-2'>
-                          <Label>{t('Prompt price ($/1M tokens)')}</Label>
-                          <Input
-                            type='text'
-                            placeholder='2.0'
-                            value={promptPrice}
-                            onChange={(e) =>
-                              handlePromptPriceChange(e.target.value)
-                            }
-                          />
-                          <p className='text-muted-foreground text-sm'>
-                            {promptPrice && !isNaN(parseFloat(promptPrice))
-                              ? `Calculated ratio: ${(parseFloat(promptPrice) / 2).toFixed(4)}`
-                              : t('Enter Input price to calculate ratio')}
-                          </p>
-                        </div>
-
-                        <div className='space-y-2'>
-                          <Label>{t('Completion price ($/1M tokens)')}</Label>
-                          <Input
-                            type='text'
-                            placeholder='4.0'
-                            value={completionPrice}
-                            onChange={(e) =>
-                              handleCompletionPriceChange(e.target.value)
-                            }
-                          />
-                          <p className='text-muted-foreground text-sm'>
-                            {completionPrice &&
-                            !isNaN(parseFloat(completionPrice)) &&
-                            promptPrice &&
-                            !isNaN(parseFloat(promptPrice)) &&
-                            parseFloat(promptPrice) > 0
-                              ? `Calculated ratio: ${(parseFloat(completionPrice) / parseFloat(promptPrice)).toFixed(4)}`
-                              : t('Enter Completion price to calculate ratio')}
-                          </p>
-                        </div>
+                    <div className='space-y-4'>
+                      <div className='space-y-2'>
+                        <Label>{t('Prompt price ($/1M tokens)')}</Label>
+                        <Input
+                          type='text'
+                          placeholder='2.0'
+                          value={promptPrice}
+                          onChange={(e) =>
+                            handlePromptPriceChange(e.target.value)
+                          }
+                        />
+                        <p className='text-muted-foreground text-sm'>
+                          {promptPrice &&
+                          !Number.isNaN(Number.parseFloat(promptPrice))
+                            ? `Calculated ratio: ${(Number.parseFloat(promptPrice) / 2).toFixed(4)}`
+                            : t('Enter Input price to calculate ratio')}
+                        </p>
                       </div>
-                    </>
+
+                      <div className='space-y-2'>
+                        <Label>{t('Completion price ($/1M tokens)')}</Label>
+                        <Input
+                          type='text'
+                          placeholder='4.0'
+                          value={completionPrice}
+                          onChange={(e) =>
+                            handleCompletionPriceChange(e.target.value)
+                          }
+                        />
+                        <p className='text-muted-foreground text-sm'>
+                          {completionPrice &&
+                          !Number.isNaN(Number.parseFloat(completionPrice)) &&
+                          promptPrice &&
+                          !Number.isNaN(Number.parseFloat(promptPrice)) &&
+                          Number.parseFloat(promptPrice) > 0
+                            ? `Calculated ratio: ${(Number.parseFloat(completionPrice) / Number.parseFloat(promptPrice)).toFixed(4)}`
+                            : t('Enter Completion price to calculate ratio')}
+                        </p>
+                      </div>
+                    </div>
                   )}
 
                   <Collapsible
@@ -1096,7 +1208,7 @@ export function ModelMutateDrawer({
                         }`}
                       />
                     </CollapsibleTrigger>
-                    <CollapsibleContent className='space-y-6 pt-6'>
+                    <CollapsibleContent className='flex flex-col gap-4 pt-4'>
                       <FormField
                         control={form.control}
                         name='cacheRatio'
@@ -1208,20 +1320,18 @@ export function ModelMutateDrawer({
                   </Collapsible>
                 </>
               )}
-            </div>
-
-            <Separator />
+            </SideDrawerSection>
 
             {/* Status & Sync */}
-            <div className='space-y-4'>
+            <SideDrawerSection>
               <h3 className='text-sm font-semibold'>{t('Status & Sync')}</h3>
 
               <FormField
                 control={form.control}
                 name='status'
                 render={({ field }) => (
-                  <FormItem className='flex items-center justify-between rounded-lg border p-4'>
-                    <div className='space-y-0.5'>
+                  <FormItem className={sideDrawerSwitchItemClassName()}>
+                    <div className='flex flex-col gap-0.5'>
                       <FormLabel className='text-base'>
                         {t('Enabled')}
                       </FormLabel>
@@ -1243,8 +1353,8 @@ export function ModelMutateDrawer({
                 control={form.control}
                 name='sync_official'
                 render={({ field }) => (
-                  <FormItem className='flex items-center justify-between rounded-lg border p-4'>
-                    <div className='space-y-0.5'>
+                  <FormItem className={sideDrawerSwitchItemClassName()}>
+                    <div className='flex flex-col gap-0.5'>
                       <FormLabel className='text-base'>
                         {t('Official Sync')}
                       </FormLabel>
@@ -1261,11 +1371,11 @@ export function ModelMutateDrawer({
                   </FormItem>
                 )}
               />
-            </div>
+            </SideDrawerSection>
           </form>
         </Form>
 
-        <SheetFooter className='grid grid-cols-2 gap-2 border-t px-4 py-3 sm:flex sm:px-6 sm:py-4'>
+        <SheetFooter className={sideDrawerFooterClassName()}>
           <SheetClose
             render={<Button variant='outline' disabled={isSubmitting} />}
           >

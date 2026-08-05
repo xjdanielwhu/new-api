@@ -1,10 +1,26 @@
-import React from 'react'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { useLocation, useNavigate } from '@tanstack/react-router'
 import { ArrowRight, ChevronRight, Laptop, Moon, Sun } from 'lucide-react'
+import React from 'react'
 import { useTranslation } from 'react-i18next'
-import { useSearch } from '@/context/search-provider'
-import { useTheme } from '@/context/theme-provider'
-import { useSidebarData } from '@/hooks/use-sidebar-data'
+
 import {
   Command,
   CommandDialog,
@@ -15,7 +31,11 @@ import {
   CommandList,
   CommandSeparator,
 } from '@/components/ui/command'
-import { getNavGroupsForPath } from './layout/lib/workspace-registry'
+import { useSearch } from '@/context/search-provider'
+import { useTheme } from '@/context/theme-provider'
+import { useSidebarData } from '@/hooks/use-sidebar-data'
+
+import { getNavGroupsForPath } from './layout/lib/sidebar-view-registry'
 import { ScrollArea } from './ui/scroll-area'
 
 export function CommandMenu() {
@@ -26,8 +46,9 @@ export function CommandMenu() {
   const { pathname } = useLocation()
   const sidebarData = useSidebarData()
 
-  // 根据当前路径从工作区注册表获取对应的侧边栏配置
-  const navGroups = getNavGroupsForPath(pathname, t) || sidebarData.navGroups
+  // Use the active nested sidebar view's nav groups when one matches
+  // the current URL; otherwise fall back to the root navigation.
+  const navGroups = getNavGroupsForPath(pathname, t) ?? sidebarData.navGroups
 
   const runCommand = React.useCallback(
     (command: () => unknown) => {

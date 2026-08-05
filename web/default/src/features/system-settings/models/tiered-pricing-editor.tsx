@@ -1,3 +1,22 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import { ChevronDown, Copy, Plus, Trash2 } from 'lucide-react'
 import {
   memo,
   useCallback,
@@ -10,10 +29,9 @@ import {
   type InputHTMLAttributes,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
-import { ChevronDown, Copy, Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { cn } from '@/lib/utils'
+
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -22,6 +40,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
+import { Field, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -80,6 +99,7 @@ import {
   normalizeVisualTier,
   tryParseVisualConfig,
 } from '@/features/pricing/lib/tier-expr'
+import { cn } from '@/lib/utils'
 
 const PRICE_SUFFIX = '$/1M tokens'
 const CACHE_PRICE_VARS = BILLING_EXTRA_VARS.filter(
@@ -445,7 +465,7 @@ function ConditionRow({ condition, onChange, onRemove }: ConditionRowProps) {
         </SelectContent>
       </Select>
       <Select
-        items={[...OPS.map((op) => ({ value: op, label: op }))]}
+        items={OPS.map((op) => ({ value: op, label: op }))}
         value={condition.op}
         onValueChange={(value) =>
           onChange({ ...condition, op: value as TierConditionInput['op'] })
@@ -504,7 +524,7 @@ function PriceField({ label, hint, value, onChange }: PriceFieldProps) {
       <Label className='text-muted-foreground text-xs'>{label}</Label>
       <DraftNumberInput
         min={0}
-        step={0.01}
+        step={0.000001}
         value={Number.isFinite(value) ? value : 0}
         onValueChange={onChange}
         className='h-8 w-full'
@@ -772,7 +792,7 @@ function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
     const lastIndex = tiers.length - 1
     // When adding a new fallback, give the previous catch-all tier a default
     // upper-bound condition so the expression compiles into a sane two-tier
-    // shape. Mirrors the classic editor's UX for adding tiers.
+    // shape with an immediately useful fallback.
     if (lastIndex >= 0 && tiers[lastIndex].conditions.length === 0) {
       tiers[lastIndex] = normalizeVisualTier({
         ...tiers[lastIndex],
@@ -1258,7 +1278,7 @@ function RuleGroupCard({
         <Label className='text-xs'>{t('Multiplier')}</Label>
         <DraftNumberInput
           min={0}
-          step={0.01}
+          step={0.000001}
           value={group.multiplier}
           onValueChange={(value) =>
             onChange({ ...group, multiplier: String(value) })
@@ -1291,9 +1311,7 @@ function PresetSection({ applyPreset }: PresetSectionProps) {
   return (
     <div className='space-y-2'>
       <div className='flex items-center gap-2'>
-        <span className='text-muted-foreground text-xs'>
-          {t('Preset templates')}
-        </span>
+        <span className='text-sm font-medium'>{t('Preset templates')}</span>
         {hasMore && (
           <Button
             variant='ghost'
@@ -1752,35 +1770,37 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
   }, [])
 
   return (
-    <div className='space-y-4'>
-      <div className='flex items-center justify-between gap-2'>
-        <Label className='text-xs'>{t('Editor mode')}</Label>
-        <Select
-          items={[
-            { value: 'visual', label: t('Visual editor') },
-            { value: 'raw', label: t('Expression editor') },
-          ]}
-          value={editorMode}
-          onValueChange={(value) => handleModeChange(value as EditorMode)}
-        >
-          <SelectTrigger className='w-44' size='sm'>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent alignItemWithTrigger={false}>
-            <SelectGroup>
-              <SelectItem value='visual'>{t('Visual editor')}</SelectItem>
-              <SelectItem value='raw'>{t('Expression editor')}</SelectItem>
-            </SelectGroup>
-          </SelectContent>
-        </Select>
+    <div className='space-y-5'>
+      <div className='grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end'>
+        <Field className='gap-2'>
+          <FieldLabel>{t('Editor mode')}</FieldLabel>
+          <Select
+            items={[
+              { value: 'visual', label: t('Visual editor') },
+              { value: 'raw', label: t('Expression editor') },
+            ]}
+            value={editorMode}
+            onValueChange={(value) => handleModeChange(value as EditorMode)}
+          >
+            <SelectTrigger className='w-full sm:w-56' size='sm'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              <SelectGroup>
+                <SelectItem value='visual'>{t('Visual editor')}</SelectItem>
+                <SelectItem value='raw'>{t('Expression editor')}</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </Field>
+        {editorMode === 'raw' && (
+          <div className='sm:pb-0.5'>
+            <LlmPromptHelper modelName={modelName} />
+          </div>
+        )}
       </div>
 
-      <div className='flex flex-wrap items-start gap-x-4 gap-y-1'>
-        <div className='flex-1'>
-          <PresetSection applyPreset={applyPreset} />
-        </div>
-        {editorMode === 'raw' && <LlmPromptHelper modelName={modelName} />}
-      </div>
+      <PresetSection applyPreset={applyPreset} />
 
       <div className='bg-muted/30 space-y-3 rounded-md border p-3'>
         {editorMode === 'visual' ? (

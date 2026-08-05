@@ -1,11 +1,31 @@
-import { useState, useEffect, useRef } from 'react'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { Minus, Plus } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { useState, useEffect, useRef } from 'react'
+
 import { Label } from '@/components/ui/label'
+import { cn } from '@/lib/utils'
 
 interface NumericSpinnerInputProps {
   value: number | null | undefined
   onChange: (value: number) => void
+  onCommit?: () => void
   min?: number
   max?: number
   step?: number
@@ -17,6 +37,7 @@ interface NumericSpinnerInputProps {
 export function NumericSpinnerInput({
   value,
   onChange,
+  onCommit,
   min = 0,
   max,
   step = 1,
@@ -77,7 +98,7 @@ export function NumericSpinnerInput({
   const commitValue = () => {
     setEditing(false)
     const num = Number(localValue)
-    if (isNaN(num) || localValue === '' || localValue === '-') {
+    if (Number.isNaN(num) || localValue === '' || localValue === '-') {
       setLocalValue(String(value ?? 0))
       return
     }
@@ -88,10 +109,23 @@ export function NumericSpinnerInput({
     }
   }
 
+  const handleControlBlur = (e: React.FocusEvent<HTMLDivElement>) => {
+    if (
+      e.relatedTarget instanceof Node &&
+      e.currentTarget.contains(e.relatedTarget)
+    ) {
+      return
+    }
+    onCommit?.()
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       e.preventDefault()
-      commitValue()
+      // Blurring routes Enter through the same focusout path as clicking
+      // away (input onBlur -> commitValue, container onBlur -> onCommit),
+      // so commit and onCommit each fire exactly once.
+      inputRef.current?.blur()
     } else if (e.key === 'Escape') {
       setEditing(false)
       setLocalValue(String(value ?? 0))
@@ -107,8 +141,9 @@ export function NumericSpinnerInput({
         <Label className='text-muted-foreground mr-1.5 text-xs'>{label}</Label>
       )}
       <div
+        onBlur={handleControlBlur}
         className={cn(
-          'group/spinner inline-flex h-7 items-center gap-0 rounded-md transition-colors',
+          'group/spinner border-input inline-flex h-7 items-center gap-0 rounded-md border transition-colors',
           !disabled && 'hover:bg-muted/60',
           editing && 'bg-muted/60 ring-primary/30 ring-1'
         )}
@@ -146,8 +181,9 @@ export function NumericSpinnerInput({
             type='button'
             onClick={handleStartEdit}
             disabled={disabled}
+            title={localValue}
             className={cn(
-              'h-7 min-w-8 cursor-text px-1 text-center font-mono text-sm tabular-nums',
+              'h-7 min-w-8 max-w-16 cursor-text truncate px-1 text-center font-mono text-sm tabular-nums',
               disabled && 'cursor-default opacity-50'
             )}
           >
