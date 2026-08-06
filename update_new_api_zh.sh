@@ -16,14 +16,14 @@
 set -euo pipefail
 
 # ===== 配置区 =====
-LOCAL_IMAGE="${LOCAL_IMAGE:-new-api:local}"           # 要导出的本地镜像
-EXPORT_PATH="${EXPORT_PATH:-/Volumes/D/new-api/new-api-image.tar}"  # 导出文件(每次覆盖)
+LOCAL_IMAGE="${LOCAL_IMAGE:-new-api-v2:local}"           # 要导出的本地镜像
+EXPORT_PATH="${EXPORT_PATH:-/Volumes/D/new-api-v2/new-api-v2-image.tar}"  # 导出文件(每次覆盖)
 SSH_HOST="${SSH_HOST:-124.220.165.189}"
 SSH_USER="${SSH_USER:-root}"
 SSH_PASS="${SSH_PASS:-tisson2007!}"   # 建议改为从环境变量注入, 勿明文存放
-REMOTE_DIR="${REMOTE_DIR:-/home/new-api}"
-COMPOSE_DIR="${COMPOSE_DIR:-/home/new-api}"
-SERVICE="${SERVICE:-new-api}"
+REMOTE_DIR="${REMOTE_DIR:-/home/new-api-v2}"
+COMPOSE_DIR="${COMPOSE_DIR:-/home/new-api-v2}"
+SERVICE="${SERVICE:-new-api-v2}"
 API_URL="${API_URL:-http://localhost:3000/api/status}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"   # 等待容器 healthy 的最长秒数
 
@@ -38,7 +38,7 @@ remote() { sshpass -p "$SSH_PASS" ssh -o ConnectTimeout=10 -o StrictHostKeyCheck
 command -v sshpass >/dev/null 2>&1 || fail "本机未安装 sshpass (brew install sshpass)"
 [[ "${1:-}" != "" ]] && EXPORT_PATH="$1"
 
-log "开始更新 new-api 服务"
+log "开始更新 new-api-v2 服务"
 log "导出镜像: $LOCAL_IMAGE -> $EXPORT_PATH"
 log "目标主机: $SSH_USER@$SSH_HOST"
 

@@ -9,6 +9,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	appconstant "github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -19,6 +21,128 @@ import (
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 )
+
+func isResponsesContentArrayErrorMessage(msg string) bool {
+	msg = strings.ToLower(msg)
+	return strings.Contains(msg, "invalid 'input[") &&
+		strings.Contains(msg, ".content'") &&
+		strings.Contains(msg, "array too long")
+}
+
+func isResponsesReasoningSummaryErrorMessage(msg string) bool {
+	msg = strings.ToLower(msg)
+	return strings.Contains(msg, "missing required parameter") &&
+		strings.Contains(msg, "input[") &&
+		strings.Contains(msg, ".summary'")
+}
+
+func flattenResponsesContentArraysForRetry(body []byte) ([]byte, bool) {
+	return rewriteResponsesInputForRetry(body, false)
+}
+
+func stripResponsesReasoningItemsForRetry(body []byte) ([]byte, bool) {
+	return rewriteResponsesInputForRetry(body, true)
+}
+
+func rewriteResponsesInputForRetry(body []byte, dropReasoning bool) ([]byte, bool) {
+	var reqMap map[string]any
+	if err := common.Unmarshal(body, &reqMap); err != nil {
+		return body, false
+	}
+	inputVal, ok := reqMap["input"]
+	if !ok {
+		return body, false
+	}
+	inputBytes, err := common.Marshal(inputVal)
+	if err != nil {
+		return body, false
+	}
+	var input []map[string]any
+	if err := common.Unmarshal(inputBytes, &input); err != nil {
+		return body, false
+	}
+	changed := false
+	filtered := make([]map[string]any, 0, len(input))
+	for _, item := range input {
+		itemType, _ := item["type"].(string)
+		if itemType == "reasoning" {
+			if dropReasoning {
+				changed = true
+				continue
+			}
+			if _, exists := item["content"]; exists {
+				delete(item, "content")
+				changed = true
+			}
+			if _, exists := item["summary"]; !exists {
+				item["summary"] = []any{}
+				changed = true
+			}
+			filtered = append(filtered, item)
+			continue
+		}
+		if itemType == "message" {
+			content, ok := item["content"].([]any)
+			if ok {
+				texts := make([]string, 0, len(content))
+				convertible := true
+				for _, partAny := range content {
+					part, ok := partAny.(map[string]any)
+					if !ok {
+						convertible = false
+						break
+					}
+					partType, _ := part["type"].(string)
+					switch partType {
+					case "input_text", "output_text", "text":
+						if s, _ := part["text"].(string); s != "" {
+							texts = append(texts, s)
+						}
+					default:
+						convertible = false
+					}
+				}
+				if convertible {
+					item["content"] = strings.Join(texts, "\n")
+					changed = true
+				}
+			}
+		}
+		filtered = append(filtered, item)
+	}
+	if !changed {
+		return body, false
+	}
+	reqMap["input"] = filtered
+	out, err := common.Marshal(reqMap)
+	if err != nil {
+		return body, false
+	}
+	return out, true
+}
+
+func retryResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.Adaptor, body []byte, logMessage string) (*http.Response, *types.NewAPIError) {
+	storage, createErr := common.CreateBodyStorage(body)
+	if createErr != nil {
+		return nil, nil
+	}
+	c.Set(common.KeyBodyStorage, storage)
+	c.Request.Body = io.NopCloser(storage)
+	if info.Request != nil {
+		_ = common.Unmarshal(body, info.Request)
+	}
+	logger.LogWarn(c, logMessage)
+	requestBody := bytes.NewBuffer(body)
+	resp, err := adaptor.DoRequest(c, info, requestBody)
+	if err != nil || resp == nil {
+		return nil, nil
+	}
+	httpResp := resp.(*http.Response)
+	if httpResp.StatusCode == http.StatusOK {
+		return httpResp, nil
+	}
+	return httpResp, service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+}
 
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
@@ -76,9 +200,6 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
-		// 透传模式不经过 ConvertOpenAIResponsesRequest，需要在此清洗 input 中
-		// 非法/失效的 id（如 Codex 生成的 rs_resp_chatcmpl-... 伪 id、store=false 时的悬空引用），
-		// 否则上游会报 "Item with id ... not found" 或 id 前缀 400 错误
 		rawBody, err := io.ReadAll(storage)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
@@ -94,53 +215,70 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
-
-		// remove disabled fields for OpenAI Responses API
 		jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
-
-		// apply param override
 		if len(info.ParamOverride) > 0 {
 			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
 			if err != nil {
 				return newAPIErrorFromParamOverride(err)
 			}
 		}
-
-		// 最终兜底：清洗请求体中非法/失效的 input id，
-		// 防止适配器遗漏导致上游报 "Item with id ... not found"
 		jsonData = openai.SanitizeResponsesRequestBody(jsonData)
-
 		if common.DebugEnabled {
 			println("requestBody: ", string(jsonData))
 		}
 		requestBody = bytes.NewBuffer(jsonData)
 	}
 
-	var httpResp *http.Response
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
 	}
 
 	statusCodeMappingStr := c.GetString("status_code_mapping")
-
+	var httpResp *http.Response
 	if resp != nil {
 		httpResp = resp.(*http.Response)
-
 		if httpResp.StatusCode != http.StatusOK {
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
-			// reset status code 重置状态码
+			storage, storageErr := common.GetBodyStorage(c)
+			if storageErr == nil {
+				rawBody, readErr := storage.Bytes()
+				if readErr == nil && isResponsesContentArrayErrorMessage(newAPIError.Error()) {
+					if newBody, changed := flattenResponsesContentArraysForRetry(rawBody); changed {
+						retryResp, retryErr := retryResponsesRequest(c, info, adaptor, newBody, "responses handler auto-recovery: flattened input content arrays and retrying upstream once")
+						if retryResp != nil && retryErr == nil {
+							httpResp = retryResp
+							goto RESPONSE_OK
+						}
+						if retryErr != nil {
+							newAPIError = retryErr
+							if isResponsesReasoningSummaryErrorMessage(newAPIError.Error()) {
+								if newBody2, changed2 := stripResponsesReasoningItemsForRetry(newBody); changed2 {
+									retryResp2, retryErr2 := retryResponsesRequest(c, info, adaptor, newBody2, "responses handler auto-recovery: stripped incompatible reasoning items and retrying upstream once")
+									if retryResp2 != nil && retryErr2 == nil {
+										httpResp = retryResp2
+										goto RESPONSE_OK
+									}
+									if retryErr2 != nil {
+										newAPIError = retryErr2
+									}
+								}
+							}
+						}
+					}
+				}
+			}
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 			return newAPIError
 		}
 	}
 
+RESPONSE_OK:
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
 	if newAPIError != nil {
-		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
 	}
@@ -149,7 +287,6 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
 		originModelName := info.OriginModelName
 		originPriceData := info.PriceData
-
 		_, err := helper.ModelPriceHelper(c, info, info.GetEstimatePromptTokens(), &types.TokenCountMeta{})
 		if err != nil {
 			info.OriginModelName = originModelName
@@ -157,7 +294,6 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithSkipRetry(), types.ErrOptionWithStatusCode(http.StatusBadRequest))
 		}
 		service.PostTextConsumeQuota(c, info, usageDto, nil)
-
 		info.OriginModelName = originModelName
 		info.PriceData = originPriceData
 		return nil

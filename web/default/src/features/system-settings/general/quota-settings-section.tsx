@@ -76,10 +76,7 @@ type QuotaSettingsSectionProps = {
   complianceConfirmed?: boolean
 }
 
-export function QuotaSettingsSection({
-  defaultValues,
-  complianceConfirmed = true,
-}: QuotaSettingsSectionProps) {
+export function QuotaSettingsSection(props: QuotaSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const handleNumberChange =
@@ -96,7 +93,7 @@ export function QuotaSettingsSection({
         unknown,
         QuotaFormValues
       >,
-      defaultValues,
+      defaultValues: props.defaultValues,
       onSubmit: async (_data, changedFields) => {
         for (const [key, value] of Object.entries(changedFields)) {
           await updateOption.mutateAsync({
@@ -111,7 +108,7 @@ export function QuotaSettingsSection({
     <SettingsSection title={t('Quota Settings')}>
       <FormNavigationGuard when={isDirty} />
 
-      {!complianceConfirmed ? (
+      {!props.complianceConfirmed ? (
         <Alert variant='destructive'>
           <AlertDescription>
             {t(
@@ -277,26 +274,6 @@ export function QuotaSettingsSection({
                   </FormControl>
                   <FormDescription>
                     {t('External link for users to purchase quota')}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='general_setting.docs_link'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Documentation Link')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      placeholder={t('https://docs.example.com')}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t('Link to your documentation site')}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

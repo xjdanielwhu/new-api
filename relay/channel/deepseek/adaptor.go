@@ -1,6 +1,7 @@
 package deepseek
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -68,6 +69,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		switch info.RelayMode {
 		case constant.RelayModeCompletions:
 			return fmt.Sprintf("%s/completions", fimBaseUrl), nil
+		case constant.RelayModeResponses:
+			return fmt.Sprintf("%s/responses", info.ChannelBaseUrl), nil
 		default:
 			return fmt.Sprintf("%s/v1/chat/completions", info.ChannelBaseUrl), nil
 		}
@@ -159,8 +162,107 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	// TODO implement me
-	return nil, errors.New("not implemented")
+	oaiAdaptor := openai.Adaptor{}
+	convertedRequest, err := oaiAdaptor.ConvertOpenAIResponsesRequest(c, info, request)
+	if err != nil {
+		return nil, err
+	}
+	responsesRequest, ok := convertedRequest.(dto.OpenAIResponsesRequest)
+	if !ok {
+		return convertedRequest, nil
+	}
+	responsesRequest.Input = normalizeDeepSeekResponsesInput(responsesRequest.Input)
+	modelName := responsesRequest.Model
+	if info != nil && info.ChannelMeta != nil && info.UpstreamModelName != "" {
+		modelName = info.UpstreamModelName
+	}
+	baseModel, thinkingType, effort, matched := reasoning.ParseDeepSeekV4ThinkingSuffix(modelName)
+	if !matched {
+		return responsesRequest, nil
+	}
+	responsesRequest.Model = baseModel
+	responsesRequest.EnableThinking = nil
+	responsesRequest.ThinkingBudget = nil
+	if thinkingType != "" {
+		thinking, marshalErr := common.Marshal(map[string]string{
+			"type": thinkingType,
+		})
+		if marshalErr != nil {
+			return nil, fmt.Errorf("error marshalling thinking: %w", marshalErr)
+		}
+		responsesRequest.EnableThinking = thinking
+	}
+	if effort != "" {
+		responsesRequest.ThinkingBudget = common.StringToByteSlice(fmt.Sprintf("\"%s\"", effort))
+		responsesRequest.Reasoning = &dto.Reasoning{Effort: effort}
+		if info != nil {
+			info.ReasoningEffort = effort
+		}
+	}
+	if info != nil && info.ChannelMeta != nil {
+		info.UpstreamModelName = baseModel
+	}
+	return responsesRequest, nil
+}
+
+func normalizeDeepSeekResponsesInput(input json.RawMessage) json.RawMessage {
+	if len(input) == 0 {
+		return input
+	}
+	var items []map[string]any
+	if err := common.Unmarshal(input, &items); err != nil {
+		return input
+	}
+	modified := false
+	for _, item := range items {
+		itemType, _ := item["type"].(string)
+		if itemType != "message" {
+			continue
+		}
+		content, ok := item["content"]
+		if !ok {
+			continue
+		}
+		parts, ok := content.([]any)
+		if !ok {
+			continue
+		}
+		if len(parts) == 0 {
+			item["content"] = ""
+			modified = true
+			continue
+		}
+		texts := make([]string, 0, len(parts))
+		convertible := true
+		for _, partAny := range parts {
+			part, ok := partAny.(map[string]any)
+			if !ok {
+				convertible = false
+				break
+			}
+			partType, _ := part["type"].(string)
+			switch partType {
+			case "input_text":
+				text, _ := part["text"].(string)
+				texts = append(texts, text)
+			default:
+				convertible = false
+			}
+		}
+		if !convertible {
+			continue
+		}
+		item["content"] = strings.Join(texts, "\n")
+		modified = true
+	}
+	if !modified {
+		return input
+	}
+	sanitized, err := common.Marshal(items)
+	if err != nil {
+		return input
+	}
+	return sanitized
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {

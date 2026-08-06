@@ -16,8 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useStatus } from '@/hooks/use-status'
+
 import { SettingsPage } from '../components/settings-page'
-import type { SiteSettings } from '../types'
+import type { SiteSettings, SystemOption } from '../types'
 import {
   SITE_DEFAULT_SECTION,
   getSiteSectionContent,
@@ -32,13 +34,32 @@ const defaultSiteSettings: SiteSettings = {
   About: '',
   HomePageContent: '',
   ServerAddress: '',
+  'general_setting.docs_link': '',
   'legal.user_agreement': '',
   'legal.privacy_policy': '',
   HeaderNavModules: '',
   SidebarModulesAdmin: '',
 }
 
+function resolveSiteSettings(
+  settings: SiteSettings,
+  raw: SystemOption[] | undefined,
+  docsLinkFromStatus: string
+): SiteSettings {
+  const hasDocsLinkOption =
+    raw?.some((option) => option.key === 'general_setting.docs_link') ?? false
+  if (hasDocsLinkOption || !docsLinkFromStatus) {
+    return settings
+  }
+  return {
+    ...settings,
+    'general_setting.docs_link': docsLinkFromStatus,
+  }
+}
+
 export function SiteSettings() {
+  const { status } = useStatus()
+
   return (
     <SettingsPage
       routePath='/_authenticated/system-settings/site/$section'
@@ -46,6 +67,13 @@ export function SiteSettings() {
       defaultSection={SITE_DEFAULT_SECTION}
       getSectionContent={getSiteSectionContent}
       getSectionMeta={getSiteSectionMeta}
+      resolveSettings={(settings, raw) =>
+        resolveSiteSettings(
+          settings,
+          raw,
+          (status?.docs_link as string | undefined) ?? ''
+        )
+      }
     />
   )
 }

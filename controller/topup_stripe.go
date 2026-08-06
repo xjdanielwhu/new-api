@@ -13,7 +13,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
@@ -348,10 +347,10 @@ func genStripeLink(referenceId string, customerId string, email string, amount i
 
 	// Use custom URLs if provided, otherwise use defaults
 	if successURL == "" {
-		successURL = service.PaymentReturnURL("/usage-logs")
+		successURL = paymentReturnPath("/wallet?show_history=true")
 	}
 	if cancelURL == "" {
-		cancelURL = service.PaymentReturnURL("/wallet")
+		cancelURL = paymentReturnPath("/wallet")
 	}
 
 	params := &stripe.CheckoutSessionParams{

@@ -254,6 +254,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = relayHandler(c, relayInfo)
 		}
 
+
 		if newAPIError == nil {
 			relayInfo.LastError = nil
 			return

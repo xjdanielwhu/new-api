@@ -48,6 +48,7 @@ import { useUpdateOption } from '../hooks/use-update-option'
 const _systemInfoSchema = z.object({
   SystemName: z.string().min(1),
   ServerAddress: z.string().optional(),
+  DocsLink: z.string().optional(),
   Logo: z.string().url().optional().or(z.literal('')),
   Footer: z.string().optional(),
   About: z.string().optional(),
@@ -69,20 +70,21 @@ function normalizeValue(value: unknown): string {
   return typeof value === 'string' ? value : String(value)
 }
 
-export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
+export function SystemInfoSection(props: SystemInfoSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
 
   const normalizedDefaults: SystemInfoFormValues = {
-    SystemName: normalizeValue(defaultValues.SystemName),
-    ServerAddress: normalizeValue(defaultValues.ServerAddress),
-    Logo: normalizeValue(defaultValues.Logo),
-    Footer: normalizeValue(defaultValues.Footer),
-    About: normalizeValue(defaultValues.About),
-    HomePageContent: normalizeValue(defaultValues.HomePageContent),
+    SystemName: normalizeValue(props.defaultValues.SystemName),
+    ServerAddress: normalizeValue(props.defaultValues.ServerAddress),
+    DocsLink: normalizeValue(props.defaultValues.DocsLink),
+    Logo: normalizeValue(props.defaultValues.Logo),
+    Footer: normalizeValue(props.defaultValues.Footer),
+    About: normalizeValue(props.defaultValues.About),
+    HomePageContent: normalizeValue(props.defaultValues.HomePageContent),
     legal: {
-      user_agreement: normalizeValue(defaultValues.legal?.user_agreement),
-      privacy_policy: normalizeValue(defaultValues.legal?.privacy_policy),
+      user_agreement: normalizeValue(props.defaultValues.legal?.user_agreement),
+      privacy_policy: normalizeValue(props.defaultValues.legal?.privacy_policy),
     },
   }
 
@@ -91,6 +93,7 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
       error: () => t('System name is required'),
     }),
     ServerAddress: z.string().optional(),
+    DocsLink: z.string().optional(),
     Logo: z.string().url().optional().or(z.literal('')),
     Footer: z.string().optional(),
     About: z.string().optional(),
@@ -111,13 +114,20 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
       defaultValues: normalizedDefaults,
       onSubmit: async (_data, changedFields) => {
         for (const [key, value] of Object.entries(changedFields)) {
-          let v = normalizeValue(value)
+          let nextValue = normalizeValue(value)
           if (key === 'ServerAddress') {
-            v = v.replace(/\/+$/, '')
+            nextValue = nextValue.replace(/\/+$/, '')
+          }
+          if (key === 'DocsLink') {
+            await updateOption.mutateAsync({
+              key: 'general_setting.docs_link',
+              value: nextValue,
+            })
+            continue
           }
           await updateOption.mutateAsync({
             key,
-            value: v,
+            value: nextValue,
           })
         }
       },
@@ -168,6 +178,26 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                       {t(
                         'The public URL of your server, used for OAuth callbacks, webhooks, and other external integrations'
                       )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='DocsLink'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Documentation Link')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder={t('https://docs.example.com')}
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Link to your documentation site')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
