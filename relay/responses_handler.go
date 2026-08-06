@@ -37,14 +37,42 @@ func isResponsesReasoningSummaryErrorMessage(msg string) bool {
 }
 
 func flattenResponsesContentArraysForRetry(body []byte) ([]byte, bool) {
-	return rewriteResponsesInputForRetry(body, false)
+	return rewriteResponsesInputForRetry(body, false, false)
+}
+
+func summarizeResponsesReasoningItemsForRetry(body []byte) ([]byte, bool) {
+	return rewriteResponsesInputForRetry(body, false, true)
 }
 
 func stripResponsesReasoningItemsForRetry(body []byte) ([]byte, bool) {
-	return rewriteResponsesInputForRetry(body, true)
+	return rewriteResponsesInputForRetry(body, true, false)
 }
 
-func rewriteResponsesInputForRetry(body []byte, dropReasoning bool) ([]byte, bool) {
+func extractReasoningSummaryText(summary any) string {
+	summaryParts, ok := summary.([]any)
+	if !ok {
+		return ""
+	}
+	texts := make([]string, 0, len(summaryParts))
+	for _, partAny := range summaryParts {
+		part, ok := partAny.(map[string]any)
+		if !ok {
+			continue
+		}
+		partType, _ := part["type"].(string)
+		if partType != "summary_text" && partType != "text" {
+			continue
+		}
+		text, _ := part["text"].(string)
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		texts = append(texts, text)
+	}
+	return strings.TrimSpace(strings.Join(texts, "\n\n"))
+}
+
+func rewriteResponsesInputForRetry(body []byte, dropReasoning bool, summarizeReasoning bool) ([]byte, bool) {
 	var reqMap map[string]any
 	if err := common.Unmarshal(body, &reqMap); err != nil {
 		return body, false
@@ -69,6 +97,18 @@ func rewriteResponsesInputForRetry(body []byte, dropReasoning bool) ([]byte, boo
 			if dropReasoning {
 				changed = true
 				continue
+			}
+			if summarizeReasoning {
+				summaryText := extractReasoningSummaryText(item["summary"])
+				if summaryText != "" {
+					filtered = append(filtered, map[string]any{
+						"type":    "message",
+						"role":    "assistant",
+						"content": "[Context Summary]\n" + summaryText,
+					})
+					changed = true
+					continue
+				}
 			}
 			if _, exists := item["content"]; exists {
 				delete(item, "content")
@@ -256,14 +296,26 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 						if retryErr != nil {
 							newAPIError = retryErr
 							if isResponsesReasoningSummaryErrorMessage(newAPIError.Error()) {
-								if newBody2, changed2 := stripResponsesReasoningItemsForRetry(newBody); changed2 {
-									retryResp2, retryErr2 := retryResponsesRequest(c, info, adaptor, newBody2, "responses handler auto-recovery: stripped incompatible reasoning items and retrying upstream once")
+								if newBody2, changed2 := summarizeResponsesReasoningItemsForRetry(newBody); changed2 {
+									retryResp2, retryErr2 := retryResponsesRequest(c, info, adaptor, newBody2, "responses handler auto-recovery: summarized incompatible reasoning items and retrying upstream once")
 									if retryResp2 != nil && retryErr2 == nil {
 										httpResp = retryResp2
 										goto RESPONSE_OK
 									}
 									if retryErr2 != nil {
 										newAPIError = retryErr2
+										if isResponsesReasoningSummaryErrorMessage(newAPIError.Error()) {
+											if newBody3, changed3 := stripResponsesReasoningItemsForRetry(newBody2); changed3 {
+												retryResp3, retryErr3 := retryResponsesRequest(c, info, adaptor, newBody3, "responses handler auto-recovery: stripped incompatible reasoning items and retrying upstream once")
+												if retryResp3 != nil && retryErr3 == nil {
+													httpResp = retryResp3
+													goto RESPONSE_OK
+												}
+												if retryErr3 != nil {
+													newAPIError = retryErr3
+												}
+											}
+										}
 									}
 								}
 							}

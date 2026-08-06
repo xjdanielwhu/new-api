@@ -62,3 +62,50 @@ func TestFlattenResponsesContentArraysForRetry_StripsReasoningContentKeepsSummar
 		t.Fatalf("expected empty summary array, got %#v", summary)
 	}
 }
+
+func TestSummarizeResponsesReasoningItemsForRetry_ConvertsSummaryToAssistantMessage(t *testing.T) {
+	raw := []byte(`{"input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"first"},{"type":"summary_text","text":"second"}]}]}`)
+	out, changed := summarizeResponsesReasoningItemsForRetry(raw)
+	if !changed {
+		t.Fatal("expected changed=true")
+	}
+	var req map[string]any
+	if err := common.Unmarshal(out, &req); err != nil {
+		t.Fatal(err)
+	}
+	input := req["input"].([]any)
+	if len(input) != 1 {
+		t.Fatalf("expected one converted input item, got %d", len(input))
+	}
+	item := input[0].(map[string]any)
+	if item["type"] != "message" {
+		t.Fatalf("expected converted item type=message, got %#v", item["type"])
+	}
+	if item["role"] != "assistant" {
+		t.Fatalf("expected converted role=assistant, got %#v", item["role"])
+	}
+	content, _ := item["content"].(string)
+	if content != "[Context Summary]\nfirst\n\nsecond" {
+		t.Fatalf("unexpected summarized content: %q", content)
+	}
+}
+
+func TestStripResponsesReasoningItemsForRetry_RemovesReasoningItems(t *testing.T) {
+	raw := []byte(`{"input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"first"}]},{"type":"message","role":"user","content":"hello"}]}`)
+	out, changed := stripResponsesReasoningItemsForRetry(raw)
+	if !changed {
+		t.Fatal("expected changed=true")
+	}
+	var req map[string]any
+	if err := common.Unmarshal(out, &req); err != nil {
+		t.Fatal(err)
+	}
+	input := req["input"].([]any)
+	if len(input) != 1 {
+		t.Fatalf("expected one remaining input item, got %d", len(input))
+	}
+	item := input[0].(map[string]any)
+	if item["type"] != "message" {
+		t.Fatalf("expected remaining item type=message, got %#v", item["type"])
+	}
+}
