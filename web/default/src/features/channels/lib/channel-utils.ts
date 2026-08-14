@@ -72,7 +72,7 @@ export function getChannelTypeIcon(type: number): string {
     15: 'Baidu', // Baidu
     46: 'Baidu', // Baidu V2
     16: 'Zhipu', // Zhipu
-    26: 'Zhipu V4', // Zhipu V4
+    26: 'Zhipu', // Zhipu V4
     17: 'Qwen', // Ali
     18: 'Spark', // Xunfei
     23: 'Hunyuan', // Tencent

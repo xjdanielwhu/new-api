@@ -64,6 +64,11 @@ describe('New API channel', () => {
     assert.equal(getChannelTypeConfig(CHANNEL_TYPE_NEW_API).icon, 'NewAPI')
   })
 
+  test('uses the official Zhipu icon for Zhipu V4 channels', () => {
+    assert.equal(getChannelTypeIcon(16), 'Zhipu')
+    assert.equal(getChannelTypeIcon(26), 'Zhipu')
+  })
+
   test('requires a non-blank Base URL', () => {
     const blankResult = channelFormSchema.safeParse(newAPIForm('  '))
 

@@ -63,8 +63,10 @@ remote "mkdir -p '$REMOTE_DIR'" || fail "创建远程目录失败"
 ok "远程目录就绪"
 
 # ===== 4. 上传镜像 tar =====
+# 使用密钥认证的 scp（本机公钥需已加入远程 authorized_keys）。
+# 注意: 不要改用 sshpass -p scp —— sshpass 强制 pty，会破坏 scp/sftp 二进制通道导致卡死。
 log "4/8 上传 $TAR_NAME ($(du -h "$EXPORT_PATH" | cut -f1)) ..."
-sshpass -p "$SSH_PASS" scp -o ConnectTimeout=10 "$EXPORT_PATH" "$SSH_USER@$SSH_HOST:$REMOTE_DIR/" || fail "上传失败"
+scp -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$EXPORT_PATH" "$SSH_USER@$SSH_HOST:$REMOTE_DIR/" || fail "上传失败"
 ok "上传完成"
 
 # ===== 5. MD5 校验 =====

@@ -42,15 +42,17 @@ func requestOpenAI2Zhipu(request dto.GeneralOpenAIRequest) *dto.GeneralOpenAIReq
 		Stop, _ = request.Stop.([]string)
 	}
 	out := &dto.GeneralOpenAIRequest{
-		Model:       request.Model,
-		Stream:      request.Stream,
-		Messages:    messages,
-		Temperature: request.Temperature,
-		TopP:        request.TopP,
-		Stop:        Stop,
-		Tools:       request.Tools,
-		ToolChoice:  request.ToolChoice,
-		THINKING:    request.THINKING,
+		Model:           request.Model,
+		Stream:          request.Stream,
+		StreamOptions:   request.StreamOptions,
+		Messages:        messages,
+		Temperature:     request.Temperature,
+		TopP:            request.TopP,
+		Stop:            Stop,
+		Tools:           request.Tools,
+		ToolChoice:      request.ToolChoice,
+		THINKING:        request.THINKING,
+		ReasoningEffort: request.ReasoningEffort,
 	}
 	if request.MaxTokens != nil || request.MaxCompletionTokens != nil {
 		maxTokens := request.GetMaxTokens()
