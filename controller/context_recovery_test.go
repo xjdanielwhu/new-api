@@ -113,3 +113,50 @@ func TestPayloadRecoveryShrinksBody(t *testing.T) {
 		t.Fatal("expected latest image data url kept")
 	}
 }
+
+func TestParseContextOverflowMaxTokens(t *testing.T) {
+	cases := []struct {
+		name    string
+		message string
+		want    int
+		ok      bool
+	}{
+		{
+			name:    "openai",
+			message: "This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens. Please reduce the length of the messages or completion.",
+			want:    128000,
+			ok:      true,
+		},
+		{
+			name:    "deepseek",
+			message: "This model's maximum context length is 1048565 tokens. However, you requested 3220751 tokens",
+			want:    1048565,
+			ok:      true,
+		},
+		{
+			name:    "oc configured limit",
+			message: "Input tokens exceed the configured limit of 922000 tokens. Your messages resulted in 1055751 tokens. Please reduce the length of the messages.",
+			want:    922000,
+			ok:      true,
+		},
+		{
+			name:    "kimi model token limit",
+			message: "Invalid request: Your request exceeded model token limit: 262144 (requested: 1055340)",
+			want:    262144,
+			ok:      true,
+		},
+		{
+			name:    "not a context overflow",
+			message: "insufficient quota",
+			ok:      false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseContextOverflowMaxTokens(tc.message)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("parseContextOverflowMaxTokens(%q) = (%d, %v), want (%d, %v)", tc.message, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}

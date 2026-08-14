@@ -20,7 +20,13 @@ import (
 // 匹配上游 context 超长错误中的上限数字，例如：
 // deepseek: "This model's maximum context length is 1048565 tokens. However, you requested 3220751 tokens"
 // openai:   "This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens"
-var contextOverflowMaxPattern = regexp.MustCompile(`(?i)maximum context length is (\d+) tokens`)
+// oc:       "Input tokens exceed the configured limit of 922000 tokens. Your messages resulted in 1055751 tokens"
+// kimi:     "Invalid request: Your request exceeded model token limit: 262144 (requested: 1055340)"
+var contextOverflowMaxPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)maximum context length is (\d+) tokens`),
+	regexp.MustCompile(`(?i)configured limit of (\d+) tokens`),
+	regexp.MustCompile(`(?i)model token limit: (\d+)`),
+}
 
 const contextRecoveredKey = "context_overflow_recovered"
 
@@ -34,15 +40,18 @@ const flatImageTokenEstimate = 2000
 const omittedImagePlaceholder = "[历史图片已省略]"
 
 func parseContextOverflowMaxTokens(msg string) (int, bool) {
-	m := contextOverflowMaxPattern.FindStringSubmatch(msg)
-	if m == nil {
-		return 0, false
+	for _, pattern := range contextOverflowMaxPatterns {
+		m := pattern.FindStringSubmatch(msg)
+		if m == nil {
+			continue
+		}
+		maxTokens, err := strconv.Atoi(m[1])
+		if err != nil || maxTokens <= 0 {
+			return 0, false
+		}
+		return maxTokens, true
 	}
-	maxTokens, err := strconv.Atoi(m[1])
-	if err != nil || maxTokens <= 0 {
-		return 0, false
-	}
-	return maxTokens, true
+	return 0, false
 }
 
 // tryContextOverflowRecovery 检测上游 context 超长错误，裁剪请求体中的历史消息
