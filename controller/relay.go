@@ -255,6 +255,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				relayInfo.RelayMode == relayconstant.RelayModeResponsesCompact) &&
 			tryImageUnsupportedRecovery(c, relayInfo, newAPIError) {
 			newAPIError = relayHandler(c, relayInfo)
+			// 剥离图片后重试仍可能超长（图片 token 大，剔除后上下文仍超），
+			// 再尝试一次上下文裁剪恢复
+			if newAPIError != nil && relayInfo.RelayMode == relayconstant.RelayModeChatCompletions &&
+				tryContextOverflowRecovery(c, relayInfo, newAPIError) {
+				newAPIError = relayHandler(c, relayInfo)
+			}
 		}
 
 		// tool 配对错误兜底恢复：强制清洗后原地重试一次
