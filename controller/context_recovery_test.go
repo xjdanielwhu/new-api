@@ -160,3 +160,107 @@ func TestParseContextOverflowMaxTokens(t *testing.T) {
 		})
 	}
 }
+
+func TestIsImageUnsupportedError(t *testing.T) {
+	cases := []struct {
+		name    string
+		message string
+		want    bool
+	}{
+		{
+			name:    "does not support images",
+			message: "Invalid request: This model does not support images in the conversation.",
+			want:    true,
+		},
+		{
+			name:    "image input not supported",
+			message: "Image input is not supported for this model.",
+			want:    true,
+		},
+		{
+			name:    "unsupported image",
+			message: "Unsupported image content type.",
+			want:    true,
+		},
+		{
+			name:    "no vision support",
+			message: "The model does not support vision inputs.",
+			want:    true,
+		},
+		{
+			name:    "unrelated error",
+			message: "Insufficient quota for the request.",
+			want:    false,
+		},
+		{
+			name:    "context overflow",
+			message: "Your request exceeded model token limit: 262144 (requested: 1055340)",
+			want:    false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isImageUnsupportedError(tc.message); got != tc.want {
+				t.Fatalf("isImageUnsupportedError(%q) = %v, want %v", tc.message, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStripAllImagePartsChatMessages(t *testing.T) {
+	img := func() map[string]any {
+		return map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,AAAA"}}
+	}
+	messages := []any{
+		map[string]any{"role": "user", "content": []any{img(), map[string]any{"type": "text", "text": "看图"}}},
+		map[string]any{"role": "assistant", "content": "ok"},
+		map[string]any{"role": "user", "content": []any{img(), img()}},
+	}
+	removed, changed := stripAllImageParts(messages, []string{"content"}, "text")
+	if !changed || removed != 3 {
+		t.Fatalf("expected changed=true removed=3, got changed=%v removed=%d", changed, removed)
+	}
+	placeholderSeen := false
+	for i, m := range messages {
+		mm := m.(map[string]any)
+		content, ok := mm["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, p := range content {
+			pm := p.(map[string]any)
+			if pm["type"] == "text" && pm["text"] == imageRemovedPlaceholder {
+				placeholderSeen = true
+				continue
+			}
+			if pm["type"] == "image_url" {
+				t.Fatalf("message %d: image part should have been removed, got %v", i, p)
+			}
+		}
+	}
+	if !placeholderSeen {
+		t.Fatal("expected at least one imageRemovedPlaceholder in messages")
+	}
+}
+
+func TestStripAllImagePartsResponsesInput(t *testing.T) {
+	imgPart := func() map[string]any {
+		return map[string]any{"type": "input_image", "image_url": "data:image/png;base64,BBBB"}
+	}
+	input := []any{
+		map[string]any{"type": "message", "role": "user", "content": []any{imgPart()}},
+		map[string]any{"type": "function_call_output", "call_id": "fc_1", "output": []any{imgPart()}},
+	}
+	removed, changed := stripAllImageParts(input, []string{"content", "output"}, "input_text")
+	if !changed || removed != 2 {
+		t.Fatalf("expected changed=true removed=2, got changed=%v removed=%d", changed, removed)
+	}
+	first := input[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if first["type"] != "input_text" || first["text"] != imageRemovedPlaceholder {
+		t.Fatalf("expected input_text placeholder, got %v", first)
+	}
+	fco := input[1].(map[string]any)["output"].([]any)[0].(map[string]any)
+	if fco["type"] != "input_text" || fco["text"] != imageRemovedPlaceholder {
+		t.Fatalf("expected function_call_output placeholder, got %v", fco)
+	}
+}

@@ -29,6 +29,7 @@ var contextOverflowMaxPatterns = []*regexp.Regexp{
 }
 
 const contextRecoveredKey = "context_overflow_recovered"
+const imageUnsupportedRecoveredKey = "image_unsupported_recovered"
 
 // 裁剪目标比例：上游 tokenizer 与本地估算存在偏差，留足余量避免二次溢出
 const contextTruncateTargetRatio = 0.7
@@ -38,6 +39,9 @@ const flatImageTokenEstimate = 2000
 
 // 剥离图片后的占位文本
 const omittedImagePlaceholder = "[历史图片已省略]"
+
+// 模型不支持图片输入时，图片被移除后的占位文本（模型可见，可据此告知用户）
+const imageRemovedPlaceholder = "[图片已移除：当前模型不支持图片输入]"
 
 func parseContextOverflowMaxTokens(msg string) (int, bool) {
 	for _, pattern := range contextOverflowMaxPatterns {
@@ -52,6 +56,26 @@ func parseContextOverflowMaxTokens(msg string) (int, bool) {
 		return maxTokens, true
 	}
 	return 0, false
+}
+
+// 匹配上游"模型不支持图片输入"类错误，例如：
+// "This model does not support images in the conversation"
+// "Image input is not supported for this model"
+// "Unsupported image input"
+// "model does not support vision"
+var imageUnsupportedPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)not support.{0,40}(?:image|vision)`),
+	regexp.MustCompile(`(?i)(?:image|vision).{0,40}(?:not support|unsupported)`),
+	regexp.MustCompile(`(?i)unsupported.{0,40}(?:image|vision)`),
+}
+
+func isImageUnsupportedError(msg string) bool {
+	for _, pattern := range imageUnsupportedPatterns {
+		if pattern.MatchString(msg) {
+			return true
+		}
+	}
+	return false
 }
 
 // tryContextOverflowRecovery 检测上游 context 超长错误，裁剪请求体中的历史消息
@@ -268,6 +292,42 @@ func stripOldImageParts(items []any, fields []string, textPartType string) bool 
 		}
 	}
 	return changed
+}
+
+// stripAllImageParts 剥离 items 中所有图片 part（模型不支持图片时使用），
+// 返回移除的图片数量与是否有修改。
+func stripAllImageParts(items []any, fields []string, textPartType string) (int, bool) {
+	removed := 0
+	changed := false
+	for _, item := range items {
+		mm, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, field := range fields {
+			parts, ok := mm[field].([]any)
+			if !ok {
+				continue
+			}
+			itemRemoved := 0
+			newParts := make([]any, 0, len(parts))
+			for _, p := range parts {
+				pm, ok := p.(map[string]any)
+				if !ok || !isImagePart(pm) {
+					newParts = append(newParts, p)
+					continue
+				}
+				newParts = append(newParts, map[string]any{"type": textPartType, "text": imageRemovedPlaceholder})
+				itemRemoved++
+			}
+			if itemRemoved > 0 {
+				mm[field] = newParts
+				removed += itemRemoved
+				changed = true
+			}
+		}
+	}
+	return removed, changed
 }
 
 func messageImageCount(m any) int {
@@ -609,5 +669,75 @@ func tryPayloadTooLargeRecovery(c *gin.Context, info *relaycommon.RelayInfo, api
 	c.Set(payloadRecoveredKey, true)
 	c.Header("X-Payload-Truncated", fmt.Sprintf("%d->%d", len(raw), len(newBody)))
 	logger.LogWarn(c, fmt.Sprintf("上游 413 Payload Too Large，已剥离历史图片（请求体 %d -> %d 字节）并重试", len(raw), len(newBody)))
+	return true
+}
+
+// tryImageUnsupportedRecovery 检测上游"模型不支持图片输入"错误，剥离请求中
+// 所有图片（替换为提示占位文本）后用同一渠道原地重试一次，实现用户无感；
+// 通过占位文本与响应头 X-Images-Removed 提示用户图片已被剔除。
+func tryImageUnsupportedRecovery(c *gin.Context, info *relaycommon.RelayInfo, apiErr *types.NewAPIError) bool {
+	if !constant.ContextOverflowAutoRecovery || apiErr == nil || info == nil {
+		return false
+	}
+	if c.GetBool(imageUnsupportedRecoveredKey) {
+		return false
+	}
+	if !isImageUnsupportedError(apiErr.Error()) {
+		return false
+	}
+
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return false
+	}
+	raw, err := storage.Bytes()
+	if err != nil {
+		return false
+	}
+
+	var reqMap map[string]any
+	if err := common.Unmarshal(raw, &reqMap); err != nil {
+		return false
+	}
+
+	removed := 0
+	// chat completions：messages 数组，文本 part 类型为 text
+	if messages, ok := reqMap["messages"].([]any); ok && len(messages) > 0 {
+		if n, ch := stripAllImageParts(messages, []string{"content"}, "text"); ch {
+			reqMap["messages"] = messages
+			removed = n
+		}
+	}
+	// responses：input 数组，message 的 content 与 function_call_output 的 output
+	// 均可能含图片 part，文本 part 类型为 input_text
+	if input, ok := reqMap["input"].([]any); ok && len(input) > 0 {
+		if n, ch := stripAllImageParts(input, []string{"content", "output"}, "input_text"); ch {
+			reqMap["input"] = input
+			removed += n
+		}
+	}
+	if removed == 0 {
+		return false
+	}
+
+	newBody, err := common.Marshal(reqMap)
+	if err != nil {
+		return false
+	}
+	// 更新 info.Request（非透传模式 relay 使用解析后的 DTO，而非重新读 body）
+	if info.Request != nil {
+		if err := common.Unmarshal(newBody, info.Request); err != nil {
+			return false
+		}
+	}
+	newStorage, err := common.CreateBodyStorage(newBody)
+	if err != nil {
+		return false
+	}
+	_ = storage.Close()
+	c.Set(common.KeyBodyStorage, newStorage)
+	c.Set(imageUnsupportedRecoveredKey, true)
+	c.Header("X-Images-Removed", strconv.Itoa(removed))
+	logger.LogWarn(c, fmt.Sprintf("上游不支持图片输入，已移除 %d 张图片（占位提示）并重试", removed))
 	return true
 }
