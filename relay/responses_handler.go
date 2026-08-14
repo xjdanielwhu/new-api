@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -36,6 +38,46 @@ func isResponsesReasoningSummaryErrorMessage(msg string) bool {
 		strings.Contains(msg, ".summary'")
 }
 
+var responsesContextOverflowPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)maximum context length is (\d+) tokens`),
+	regexp.MustCompile(`(?i)configured limit of (\d+) tokens`),
+	regexp.MustCompile(`(?i)model token limit: (\d+)`),
+}
+
+var responsesImageUnsupportedPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)not support.{0,40}(?:image|vision)`),
+	regexp.MustCompile(`(?i)(?:image|vision).{0,40}(?:not support|unsupported)`),
+	regexp.MustCompile(`(?i)unsupported.{0,40}(?:image|vision)`),
+	regexp.MustCompile(`(?i)unknown variant\s+` + "`" + `image`),
+	regexp.MustCompile(`(?i)unknown variant\s+"image`),
+}
+
+const responsesImageRemovedPlaceholder = "[图片已移除：当前模型不支持图片输入]"
+
+func parseResponsesContextOverflowMaxTokens(msg string) (int, bool) {
+	for _, pattern := range responsesContextOverflowPatterns {
+		m := pattern.FindStringSubmatch(msg)
+		if m == nil {
+			continue
+		}
+		maxTokens, err := strconv.Atoi(m[1])
+		if err != nil || maxTokens <= 0 {
+			return 0, false
+		}
+		return maxTokens, true
+	}
+	return 0, false
+}
+
+func isResponsesImageUnsupportedError(msg string) bool {
+	for _, pattern := range responsesImageUnsupportedPatterns {
+		if pattern.MatchString(msg) {
+			return true
+		}
+	}
+	return false
+}
+
 func flattenResponsesContentArraysForRetry(body []byte) ([]byte, bool) {
 	return rewriteResponsesInputForRetry(body, false, false)
 }
@@ -46,6 +88,125 @@ func summarizeResponsesReasoningItemsForRetry(body []byte) ([]byte, bool) {
 
 func stripResponsesReasoningItemsForRetry(body []byte) ([]byte, bool) {
 	return rewriteResponsesInputForRetry(body, true, false)
+}
+
+func responsesIsImagePart(pm map[string]any) bool {
+	partType, _ := pm["type"].(string)
+	switch partType {
+	case "image_url", "input_image", "image":
+		return true
+	}
+	return false
+}
+
+func stripAllResponsesImageParts(items []any, fields []string, textPartType string) (int, bool) {
+	removed := 0
+	changed := false
+	for _, item := range items {
+		mm, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, field := range fields {
+			parts, ok := mm[field].([]any)
+			if !ok {
+				continue
+			}
+			itemRemoved := 0
+			newParts := make([]any, 0, len(parts))
+			for _, p := range parts {
+				pm, ok := p.(map[string]any)
+				if !ok || !responsesIsImagePart(pm) {
+					newParts = append(newParts, p)
+					continue
+				}
+				newParts = append(newParts, map[string]any{"type": textPartType, "text": responsesImageRemovedPlaceholder})
+				itemRemoved++
+			}
+			if itemRemoved > 0 {
+				mm[field] = newParts
+				removed += itemRemoved
+				changed = true
+			}
+		}
+	}
+	return removed, changed
+}
+
+func stripResponsesImagesForUnsupportedRetry(body []byte) ([]byte, int, bool) {
+	var reqMap map[string]any
+	if err := common.Unmarshal(body, &reqMap); err != nil {
+		return body, 0, false
+	}
+	removed := 0
+	if input, ok := reqMap["input"].([]any); ok && len(input) > 0 {
+		if n, ch := stripAllResponsesImageParts(input, []string{"content", "output"}, "input_text"); ch {
+			reqMap["input"] = input
+			removed += n
+		}
+	}
+	if removed == 0 {
+		return body, 0, false
+	}
+	out, err := common.Marshal(reqMap)
+	if err != nil {
+		return body, 0, false
+	}
+	return out, removed, true
+}
+
+func truncateResponsesMessageString(input []any, maxTokens int, model string) bool {
+	if len(input) == 0 || maxTokens <= 0 {
+		return false
+	}
+	targetChars := maxTokens * 3
+	changed := false
+	for i := 0; i < len(input)-1; i++ {
+		item, ok := input[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		if item["type"] != "message" {
+			continue
+		}
+		content, ok := item["content"].(string)
+		if !ok || len(content) <= targetChars || targetChars <= 64 {
+			continue
+		}
+		keep := targetChars / 2
+		item["content"] = content[:keep] + "\n...[历史内容已截断]...\n" + content[len(content)-keep:]
+		changed = true
+	}
+	return changed
+}
+
+func truncateResponsesInputForContextRetry(body []byte, maxTokens int, model string) ([]byte, bool) {
+	var reqMap map[string]any
+	if err := common.Unmarshal(body, &reqMap); err != nil {
+		return body, false
+	}
+	input, ok := reqMap["input"].([]any)
+	if !ok || len(input) == 0 {
+		return body, false
+	}
+	changed := false
+	if truncateResponsesMessageString(input, maxTokens, model) {
+		changed = true
+	}
+	targetItems := int(float64(maxTokens) * 0.7)
+	for len(input) > 1 && len(input)*12000 > targetItems {
+		input = input[1:]
+		changed = true
+	}
+	if !changed {
+		return body, false
+	}
+	reqMap["input"] = input
+	out, err := common.Marshal(reqMap)
+	if err != nil {
+		return body, false
+	}
+	return out, true
 }
 
 func extractReasoningSummaryText(summary any) string {
@@ -286,35 +447,67 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			storage, storageErr := common.GetBodyStorage(c)
 			if storageErr == nil {
 				rawBody, readErr := storage.Bytes()
-				if readErr == nil && isResponsesContentArrayErrorMessage(newAPIError.Error()) {
-					if newBody, changed := flattenResponsesContentArraysForRetry(rawBody); changed {
-						retryResp, retryErr := retryResponsesRequest(c, info, adaptor, newBody, "responses handler auto-recovery: flattened input content arrays and retrying upstream once")
-						if retryResp != nil && retryErr == nil {
-							httpResp = retryResp
-							goto RESPONSE_OK
-						}
-						if retryErr != nil {
-							newAPIError = retryErr
-							if isResponsesReasoningSummaryErrorMessage(newAPIError.Error()) {
-								if newBody2, changed2 := summarizeResponsesReasoningItemsForRetry(newBody); changed2 {
-									retryResp2, retryErr2 := retryResponsesRequest(c, info, adaptor, newBody2, "responses handler auto-recovery: summarized incompatible reasoning items and retrying upstream once")
-									if retryResp2 != nil && retryErr2 == nil {
-										httpResp = retryResp2
-										goto RESPONSE_OK
-									}
-									if retryErr2 != nil {
-										newAPIError = retryErr2
-										if isResponsesReasoningSummaryErrorMessage(newAPIError.Error()) {
-											if newBody3, changed3 := stripResponsesReasoningItemsForRetry(newBody2); changed3 {
-												retryResp3, retryErr3 := retryResponsesRequest(c, info, adaptor, newBody3, "responses handler auto-recovery: stripped incompatible reasoning items and retrying upstream once")
-												if retryResp3 != nil && retryErr3 == nil {
-													httpResp = retryResp3
-													goto RESPONSE_OK
-												}
-												if retryErr3 != nil {
-													newAPIError = retryErr3
+				if readErr == nil {
+					if isResponsesContentArrayErrorMessage(newAPIError.Error()) {
+						if newBody, changed := flattenResponsesContentArraysForRetry(rawBody); changed {
+							retryResp, retryErr := retryResponsesRequest(c, info, adaptor, newBody, "responses handler auto-recovery: flattened input content arrays and retrying upstream once")
+							if retryResp != nil && retryErr == nil {
+								httpResp = retryResp
+								goto RESPONSE_OK
+							}
+							if retryErr != nil {
+								newAPIError = retryErr
+								if isResponsesReasoningSummaryErrorMessage(newAPIError.Error()) {
+									if newBody2, changed2 := summarizeResponsesReasoningItemsForRetry(newBody); changed2 {
+										retryResp2, retryErr2 := retryResponsesRequest(c, info, adaptor, newBody2, "responses handler auto-recovery: summarized incompatible reasoning items and retrying upstream once")
+										if retryResp2 != nil && retryErr2 == nil {
+											httpResp = retryResp2
+											goto RESPONSE_OK
+										}
+										if retryErr2 != nil {
+											newAPIError = retryErr2
+											if isResponsesReasoningSummaryErrorMessage(newAPIError.Error()) {
+												if newBody3, changed3 := stripResponsesReasoningItemsForRetry(newBody2); changed3 {
+													retryResp3, retryErr3 := retryResponsesRequest(c, info, adaptor, newBody3, "responses handler auto-recovery: stripped incompatible reasoning items and retrying upstream once")
+													if retryResp3 != nil && retryErr3 == nil {
+														httpResp = retryResp3
+														goto RESPONSE_OK
+													}
+													if retryErr3 != nil {
+														newAPIError = retryErr3
+													}
 												}
 											}
+										}
+									}
+								}
+							}
+						}
+					}
+					if isResponsesImageUnsupportedError(newAPIError.Error()) {
+						if newBody, removed, changed := stripResponsesImagesForUnsupportedRetry(rawBody); changed {
+							c.Header("X-Images-Removed", strconv.Itoa(removed))
+							retryResp, retryErr := retryResponsesRequest(c, info, adaptor, newBody, fmt.Sprintf("responses handler auto-recovery: removed %d unsupported images and retrying upstream once", removed))
+							if retryResp != nil && retryErr == nil {
+								httpResp = retryResp
+								goto RESPONSE_OK
+							}
+							if retryErr != nil {
+								newAPIError = retryErr
+								model := info.UpstreamModelName
+								if model == "" {
+									model = info.OriginModelName
+								}
+								if maxTokens, ok := parseResponsesContextOverflowMaxTokens(newAPIError.Error()); ok {
+									if newBody2, changed2 := truncateResponsesInputForContextRetry(newBody, maxTokens, model); changed2 {
+										c.Header("X-Context-Truncated", "responses")
+										retryResp2, retryErr2 := retryResponsesRequest(c, info, adaptor, newBody2, "responses handler auto-recovery: removed unsupported images, then truncated input context and retried upstream once")
+										if retryResp2 != nil && retryErr2 == nil {
+											httpResp = retryResp2
+											goto RESPONSE_OK
+										}
+										if retryErr2 != nil {
+											newAPIError = retryErr2
 										}
 									}
 								}
