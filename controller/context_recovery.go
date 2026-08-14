@@ -63,10 +63,13 @@ func parseContextOverflowMaxTokens(msg string) (int, bool) {
 // "Image input is not supported for this model"
 // "Unsupported image input"
 // "model does not support vision"
+// deepseek-v4-flash: "Failed to deserialize the JSON body into the target type: messages[7]: unknown variant `image_url`, expected `text`"
 var imageUnsupportedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)not support.{0,40}(?:image|vision)`),
 	regexp.MustCompile(`(?i)(?:image|vision).{0,40}(?:not support|unsupported)`),
 	regexp.MustCompile(`(?i)unsupported.{0,40}(?:image|vision)`),
+	regexp.MustCompile(`(?i)unknown variant\s+` + "`" + `image`),
+	regexp.MustCompile(`(?i)unknown variant\s+"image`),
 }
 
 func isImageUnsupportedError(msg string) bool {

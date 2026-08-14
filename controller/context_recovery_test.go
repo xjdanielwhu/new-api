@@ -173,6 +173,16 @@ func TestIsImageUnsupportedError(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "unknown variant image_url (deepseek-v4-flash)",
+			message: "Failed to deserialize the JSON body into the target type: messages[7]: unknown variant `image_url`, expected `text` at line 1 column 1626970",
+			want:    true,
+		},
+		{
+			name:    "unknown variant image (double-quoted)",
+			message: `Failed to deserialize: unknown variant "image_url", expected text`,
+			want:    true,
+		},
+		{
 			name:    "image input not supported",
 			message: "Image input is not supported for this model.",
 			want:    true,
