@@ -38,3 +38,6 @@ skills-lock.json
 
 # local docker runtime data
 /runtime-data/
+
+# 部署镜像导出产物
+new-api-v2-image.tar

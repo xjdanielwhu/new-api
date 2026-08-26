@@ -39,6 +39,23 @@ web/             — Frontend themes container
   web/default/src/i18n/ — Frontend internationalization (i18next, zh/en/fr/ru/ja/vi)
 ```
 
+## Deployment (部署)
+
+生产环境部署由本仓库两个脚本完成，二者均把本地构建的 `new-api-v2:local` 镜像部署到远端 `new-api-v2` 容器（Docker Compose 服务）：
+
+- `./update_new_api_oc.sh` — oc（海外/overseas）环境，主机 `43.162.102.227`，远端目录 `/home/new-api-v2`
+- `./update_new_api_zh.sh` — zh（国内/China）环境，主机 `124.220.165.189`，远端目录 `/home/new-api-v2`
+
+部署后端改动前的流程：
+1. 用预构建前端 dist 构建本地镜像：`docker build -f Dockerfile.localdist -t new-api-v2:local .`（依赖 `web/default/dist`、`web/classic/dist`；若前端有改动，先在对应目录 `bun run build`）。
+2. 运行目标环境脚本：`./update_new_api_oc.sh` 或 `./update_new_api_zh.sh`。
+
+脚本流程：导出镜像为 `new-api-v2-image.tar` → 密钥认证 `scp` 上传（本机 SSH 公钥需在远端 `authorized_keys`）→ MD5 校验 → `docker load` → 重建容器 → 健康检查 → 验证 `/api/status`。
+
+注意事项：
+- 远端 `image: new-api-v2:local`；`docker load` 会把原同名镜像重命名为悬空 ID，部署前/后建议在远端补回滚 tag：`docker tag new-api-v2:local new-api-v2:local.bak-YYYYMMDD`；回滚：`docker tag new-api-v2:local.bak-YYYYMMDD new-api-v2:local && cd /home/new-api-v2 && docker compose up -d --force-recreate new-api-v2`。
+- 远端 `/home/new-api-v2` 不是 git 检出，代码仅通过镜像更新。
+
 ## Internationalization (i18n)
 
 ### Backend (`i18n/`)
