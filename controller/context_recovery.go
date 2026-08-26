@@ -451,6 +451,8 @@ func isToolPairingError(msg string) bool {
 	lower := strings.ToLower(msg)
 	return strings.Contains(lower, "must be a response to a preceding message with 'tool_calls'") ||
 		strings.Contains(lower, "must be followed by tool messages") ||
+		strings.Contains(lower, "no tool output found for tool call") ||
+		strings.Contains(lower, "no output found for function call") ||
 		(strings.Contains(lower, "tool_calls") && strings.Contains(lower, "preceding"))
 }
 
@@ -604,6 +606,8 @@ func tryToolPairingRecovery(c *gin.Context, info *relaycommon.RelayInfo, apiErr 
 
 const payloadRecoveredKey = "payload_too_large_recovered"
 
+const payloadCompressRecoveredKey = "payload_too_large_compress_recovered"
+
 // tryPayloadTooLargeRecovery 检测上游 413 Payload Too Large 错误（请求体字节数超限，
 // 常见于会话累积大量 base64 图片），剥离历史图片后用同一渠道原地重试一次。
 // 与 context 超长恢复互补：413 是字节级超限，与 token 估算无关。
@@ -673,6 +677,140 @@ func tryPayloadTooLargeRecovery(c *gin.Context, info *relaycommon.RelayInfo, api
 	c.Header("X-Payload-Truncated", fmt.Sprintf("%d->%d", len(raw), len(newBody)))
 	logger.LogWarn(c, fmt.Sprintf("上游 413 Payload Too Large，已剥离历史图片（请求体 %d -> %d 字节）并重试", len(raw), len(newBody)))
 	return true
+}
+
+// tryPayloadTooLargeCompressRecovery 检测上游 413 且请求中无可剥离的历史图片时
+// （如单张超大参考图），压缩请求内的 base64 图片（降采样 + JPEG 重编码）后
+// 用同一渠道原地重试一次。与 tryPayloadTooLargeRecovery 互补：
+// 先剥离历史图片，仍 413 再压缩剩余图片。
+func tryPayloadTooLargeCompressRecovery(c *gin.Context, info *relaycommon.RelayInfo, apiErr *types.NewAPIError) bool {
+	if !constant.ContextOverflowAutoRecovery || apiErr == nil || info == nil {
+		return false
+	}
+	if apiErr.StatusCode != http.StatusRequestEntityTooLarge {
+		return false
+	}
+	if c.GetBool(payloadCompressRecoveredKey) {
+		return false
+	}
+
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return false
+	}
+	raw, err := storage.Bytes()
+	if err != nil {
+		return false
+	}
+
+	var reqMap map[string]any
+	if err := common.Unmarshal(raw, &reqMap); err != nil {
+		return false
+	}
+
+	if !compressImagesInBody(reqMap) {
+		return false
+	}
+
+	newBody, err := common.Marshal(reqMap)
+	if err != nil {
+		return false
+	}
+	if len(newBody) >= len(raw) {
+		return false
+	}
+
+	// 更新 info.Request（非透传模式 relay 使用解析后的 DTO，而非重新读 body）
+	if info.Request != nil {
+		if err := common.Unmarshal(newBody, info.Request); err != nil {
+			return false
+		}
+	}
+	newStorage, err := common.CreateBodyStorage(newBody)
+	if err != nil {
+		return false
+	}
+	_ = storage.Close()
+	c.Set(common.KeyBodyStorage, newStorage)
+	c.Request.Body = io.NopCloser(newStorage)
+	c.Set(payloadCompressRecoveredKey, true)
+	c.Header("X-Images-Compressed", fmt.Sprintf("%d->%d", len(raw), len(newBody)))
+	logger.LogWarn(c, fmt.Sprintf("上游 413 Payload Too Large，已压缩请求内图片（请求体 %d -> %d 字节）并重试", len(raw), len(newBody)))
+	return true
+}
+
+// compressImagesInBody 压缩 chat completions / responses 请求体中的 base64 图片 part，
+// 返回是否有图片被压缩替换。
+func compressImagesInBody(reqMap map[string]any) bool {
+	changed := false
+	if messages, ok := reqMap["messages"].([]any); ok {
+		for _, m := range messages {
+			if mm, ok := m.(map[string]any); ok && compressImageParts(mm, "content") {
+				changed = true
+			}
+		}
+	}
+	if input, ok := reqMap["input"].([]any); ok {
+		for _, item := range input {
+			if mm, ok := item.(map[string]any); ok {
+				if compressImageParts(mm, "content") {
+					changed = true
+				}
+				if compressImageParts(mm, "output") {
+					changed = true
+				}
+			}
+		}
+	}
+	return changed
+}
+
+// compressImageParts 压缩 item 指定字段（part 数组）中的图片 part
+func compressImageParts(mm map[string]any, field string) bool {
+	parts, ok := mm[field].([]any)
+	if !ok {
+		return false
+	}
+	changed := false
+	for _, p := range parts {
+		pm, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		partType, _ := pm["type"].(string)
+		switch partType {
+		case "image_url", "input_image", "image":
+			if v, ok := pm["image_url"]; ok {
+				if nv, ch := compressImageURLValue(v); ch {
+					pm["image_url"] = nv
+					changed = true
+				}
+			}
+		}
+	}
+	return changed
+}
+
+// compressImageURLValue 压缩单个 image_url 值（字符串或 {url: ...} 对象）
+func compressImageURLValue(v any) (any, bool) {
+	switch vv := v.(type) {
+	case string:
+		nv, err := service.CompressImageDataURL(vv)
+		if err != nil {
+			return v, false
+		}
+		return nv, true
+	case map[string]any:
+		url, _ := vv["url"].(string)
+		nv, err := service.CompressImageDataURL(url)
+		if err != nil {
+			return v, false
+		}
+		vv["url"] = nv
+		return vv, true
+	default:
+		return v, false
+	}
 }
 
 // tryImageUnsupportedRecovery 检测上游"模型不支持图片输入"错误，剥离请求中

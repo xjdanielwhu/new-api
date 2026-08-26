@@ -247,6 +247,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = relayHandler(c, relayInfo)
 		}
 
+		// 剥离历史图片后仍 413（如单张超大参考图）时，压缩请求内图片后原地重试一次
+		if newAPIError != nil && relayFormat == types.RelayFormatOpenAI &&
+			(relayInfo.RelayMode == relayconstant.RelayModeChatCompletions ||
+				relayInfo.RelayMode == relayconstant.RelayModeResponses ||
+				relayInfo.RelayMode == relayconstant.RelayModeResponsesCompact) &&
+			tryPayloadTooLargeCompressRecovery(c, relayInfo, newAPIError) {
+			newAPIError = relayHandler(c, relayInfo)
+		}
+
 		// 上游"模型不支持图片输入"自动恢复：剥离请求中所有图片后原地重试，
 		// 用户无感，并通过占位文本与 X-Images-Removed 响应头提示
 		if newAPIError != nil && relayFormat == types.RelayFormatOpenAI &&

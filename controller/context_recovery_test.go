@@ -1,6 +1,12 @@
 package controller
 
 import (
+	"bytes"
+	"encoding/base64"
+	"image"
+	"image/color"
+	"image/png"
+	"math/rand"
 	"strings"
 	"testing"
 
@@ -273,4 +279,138 @@ func TestStripAllImagePartsResponsesInput(t *testing.T) {
 	if fco["type"] != "input_text" || fco["text"] != imageRemovedPlaceholder {
 		t.Fatalf("expected function_call_output placeholder, got %v", fco)
 	}
+}
+
+func TestIsToolPairingErrorNoToolOutputFound(t *testing.T) {
+	cases := []struct {
+		name    string
+		message string
+		want    bool
+	}{
+		{
+			name:    "cooai no tool output found",
+			message: "No tool output found for tool call call_02_9r7hnOiZfy9N67N7azD82137.",
+			want:    true,
+		},
+		{
+			name:    "no output found for function call",
+			message: "No output found for function call call_abc123",
+			want:    true,
+		},
+		{
+			name:    "must be followed by tool messages",
+			message: "assistant message with 'tool_calls' must be followed by tool messages",
+			want:    true,
+		},
+		{
+			name:    "unrelated error",
+			message: "The server had an error while processing your request.",
+			want:    false,
+		},
+	}
+	for _, tc := range cases {
+		if got := isToolPairingError(tc.message); got != tc.want {
+			t.Fatalf("%s: isToolPairingError(%q) = %v, want %v", tc.name, tc.message, got, tc.want)
+		}
+	}
+}
+
+func TestCompressImagesInBodyChatMessages(t *testing.T) {
+	imgPart := func() map[string]any {
+		// 大尺寸 base64 PNG，压缩后必然变小
+		dataURL := testCompressPNGDataURL(t, 1600, 1200)
+		return map[string]any{"type": "image_url", "image_url": map[string]any{"url": dataURL}}
+	}
+	reqMap := map[string]any{
+		"model": "chatgpt-5.4",
+		"messages": []any{
+			map[string]any{"role": "user", "content": []any{imgPart(), map[string]any{"type": "text", "text": "用这张参考图做海报"}}},
+		},
+	}
+	raw, err := common.Marshal(reqMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compressImagesInBody(reqMap) {
+		t.Fatal("expected compressImagesInBody changed=true")
+	}
+	newBody, err := common.Marshal(reqMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(newBody) >= len(raw) {
+		t.Fatalf("expected body shrunk: before=%d after=%d", len(raw), len(newBody))
+	}
+	var parsed map[string]any
+	if err := common.Unmarshal(newBody, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	content := parsed["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	url := content[0].(map[string]any)["image_url"].(map[string]any)["url"].(string)
+	if !strings.HasPrefix(url, "data:image/jpeg;base64,") {
+		t.Fatalf("expected compressed jpeg data url, got prefix: %s", url[:40])
+	}
+}
+
+func TestCompressImagesInBodyResponsesInput(t *testing.T) {
+	dataURL := testCompressPNGDataURL(t, 1600, 1200)
+	reqMap := map[string]any{
+		"model": "chatgpt-5.4",
+		"input": []any{
+			map[string]any{"type": "message", "role": "user", "content": []any{
+				map[string]any{"type": "input_image", "image_url": dataURL},
+			}},
+		},
+	}
+	raw, err := common.Marshal(reqMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compressImagesInBody(reqMap) {
+		t.Fatal("expected compressImagesInBody changed=true")
+	}
+	newBody, err := common.Marshal(reqMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(newBody) >= len(raw) {
+		t.Fatalf("expected body shrunk: before=%d after=%d", len(raw), len(newBody))
+	}
+	var parsed map[string]any
+	if err := common.Unmarshal(newBody, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	content := parsed["input"].([]any)[0].(map[string]any)["content"].([]any)
+	url := content[0].(map[string]any)["image_url"].(string)
+	if !strings.HasPrefix(url, "data:image/jpeg;base64,") {
+		t.Fatalf("expected compressed jpeg data url, got prefix: %s", url[:40])
+	}
+}
+
+func TestCompressImagesInBodyNoChangeWhenSmallOrAbsent(t *testing.T) {
+	reqMap := map[string]any{
+		"model": "chatgpt-5.4",
+		"input": []any{
+			map[string]any{"type": "message", "role": "user", "content": "没有图片"},
+		},
+	}
+	if compressImagesInBody(reqMap) {
+		t.Fatal("expected no change for text-only body")
+	}
+}
+
+func testCompressPNGDataURL(t *testing.T, w, h int) string {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	rnd := rand.New(rand.NewSource(42))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(rnd.Intn(256)), G: uint8(rnd.Intn(256)), B: uint8(rnd.Intn(256)), A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
 }

@@ -38,6 +38,14 @@ func isResponsesReasoningSummaryErrorMessage(msg string) bool {
 		strings.Contains(msg, ".summary'")
 }
 
+func isResponsesEncryptedContentErrorMessage(msg string) bool {
+	msg = strings.ToLower(msg)
+	return strings.Contains(msg, "encrypted content") &&
+		(strings.Contains(msg, "could not be verified") ||
+			strings.Contains(msg, "could not be decrypted") ||
+			strings.Contains(msg, "could not be parsed"))
+}
+
 var responsesContextOverflowPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)maximum context length is (\d+) tokens`),
 	regexp.MustCompile(`(?i)configured limit of (\d+) tokens`),
@@ -88,6 +96,51 @@ func summarizeResponsesReasoningItemsForRetry(body []byte) ([]byte, bool) {
 
 func stripResponsesReasoningItemsForRetry(body []byte) ([]byte, bool) {
 	return rewriteResponsesInputForRetry(body, true, false)
+}
+
+func hasResponsesReasoningItems(body []byte) bool {
+	var reqMap map[string]any
+	if err := common.Unmarshal(body, &reqMap); err != nil {
+		return false
+	}
+	input, ok := reqMap["input"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range input {
+		if mm, ok := item.(map[string]any); ok {
+			if itemType, _ := mm["type"].(string); itemType == "reasoning" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func summarizeResponsesInputTypes(body []byte) string {
+	var reqMap map[string]any
+	if err := common.Unmarshal(body, &reqMap); err != nil {
+		return "unmarshal_failed"
+	}
+	input, ok := reqMap["input"].([]any)
+	if !ok {
+		return "no_input_array"
+	}
+	typesSeen := make([]string, 0, len(input))
+	for _, item := range input {
+		if mm, ok := item.(map[string]any); ok {
+			itemType, _ := mm["type"].(string)
+			if itemType == "" {
+				if role, _ := mm["role"].(string); role != "" {
+					itemType = "role:" + role
+				} else {
+					itemType = "unknown"
+				}
+			}
+			typesSeen = append(typesSeen, itemType)
+		}
+	}
+	return strings.Join(typesSeen, ",")
 }
 
 func responsesIsImagePart(pm map[string]any) bool {
@@ -209,6 +262,138 @@ func truncateResponsesInputForContextRetry(body []byte, maxTokens int, model str
 	return out, true
 }
 
+const responsesOmittedToolOutputPlaceholder = "[工具调用结果已省略]"
+
+// isResponsesToolPairingError 匹配上游 function_call / function_call_output
+// 配对缺失类错误，例如：
+// cooai/deepseek: "No tool output found for tool call call_02_..."
+// openai:         "No function call found for function_call_output item with call_id ..."
+func isResponsesToolPairingError(msg string) bool {
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "no tool output found for tool call") ||
+		strings.Contains(lower, "no output found for function call") ||
+		strings.Contains(lower, "no function call found") ||
+		(strings.Contains(lower, "tool output") && strings.Contains(lower, "missing"))
+}
+
+// sanitizeResponsesToolCallPairing 修复 responses input 中 function_call /
+// function_call_output 配对问题：
+//  1. dropOrphanOutputs 为 true 时，删除孤儿 function_call_output
+//     （前面没有携带对应 call_id 的 function_call）
+//  2. 为缺失响应的 function_call 补充占位 function_call_output，避免
+//     "No tool output found for tool call ..." 错误
+//
+// 与 chat 侧 sanitizeToolCallPairing 语义一致，但允许连续的 function_call
+// 同时挂起（responses 中并行工具调用是多个独立 item）。
+// dropOrphanOutputs 为 false 时（请求携带 previous_response_id），
+// 未匹配的 function_call_output 会被保留：其 function_call 可能位于
+// 上游服务端会话中，删除会破坏正常工具调用续跑流程。
+func sanitizeResponsesToolCallPairing(input []any, dropOrphanOutputs bool) ([]any, int) {
+	changed := 0
+	out := make([]any, 0, len(input)+2)
+	answerable := map[string]bool{}
+	var unanswered []string
+
+	fabricateMissing := func() {
+		for _, id := range unanswered {
+			out = append(out, map[string]any{
+				"type":    "function_call_output",
+				"call_id": id,
+				"output":  responsesOmittedToolOutputPlaceholder,
+			})
+			changed++
+		}
+		unanswered = nil
+	}
+
+	for _, item := range input {
+		mm, ok := item.(map[string]any)
+		if !ok {
+			out = append(out, item)
+			continue
+		}
+		itemType, _ := mm["type"].(string)
+		switch itemType {
+		case "function_call":
+			out = append(out, item)
+			if id, _ := mm["call_id"].(string); id != "" && !answerable[id] {
+				answerable[id] = true
+				unanswered = append(unanswered, id)
+			}
+		case "function_call_output":
+			id, _ := mm["call_id"].(string)
+			pending := false
+			for i, u := range unanswered {
+				if u == id {
+					pending = true
+					unanswered = append(unanswered[:i], unanswered[i+1:]...)
+					break
+				}
+			}
+			if id != "" && pending {
+				out = append(out, item)
+			} else if dropOrphanOutputs {
+				// 孤儿/重复 function_call_output（其 function_call 已被压缩/剥离或已响应），删除
+				changed++
+			} else {
+				// previous_response_id 场景：保留可能与服务端会话配对的输出
+				out = append(out, item)
+			}
+		case "message":
+			// 边界消息：function_call 响应无法跨消息，先补齐再追加
+			fabricateMissing()
+			answerable = map[string]bool{}
+			out = append(out, item)
+		default:
+			// reasoning / item_reference 等不打断配对
+			out = append(out, item)
+		}
+	}
+	// 末尾仍有未响应的 function_call，补占位
+	fabricateMissing()
+	return out, changed
+}
+
+// sanitizeResponsesToolPairingForRetry 在请求体上执行 function_call 配对清洗，
+// 返回清洗后的请求体与是否有修改。
+func sanitizeResponsesToolPairingForRetry(body []byte) ([]byte, bool) {
+	var reqMap map[string]any
+	if err := common.Unmarshal(body, &reqMap); err != nil {
+		return body, false
+	}
+	input, ok := reqMap["input"].([]any)
+	if !ok || len(input) == 0 {
+		return body, false
+	}
+	// previous_response_id 时，input 中可能只包含 function_call_output，
+	// 其 function_call 位于上游服务端会话中，不能按孤儿输出删除
+	previousID, _ := reqMap["previous_response_id"].(string)
+	sanitized, changed := sanitizeResponsesToolCallPairing(input, previousID == "")
+	if changed == 0 {
+		return body, false
+	}
+	reqMap["input"] = sanitized
+	out, err := common.Marshal(reqMap)
+	if err != nil {
+		return body, false
+	}
+	return out, true
+}
+
+// tryResponsesToolPairingRecovery 修复 responses input 中 function_call /
+// function_call_output 配对问题后用同一渠道重试一次，返回重试结果；
+// 无需修改时不重试（返回 nil, nil）。
+func tryResponsesToolPairingRecovery(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.Adaptor, body []byte, logMessage string) (*http.Response, *types.NewAPIError) {
+	if !appconstant.ContextOverflowAutoRecovery {
+		return nil, nil
+	}
+	newBody, changed := sanitizeResponsesToolPairingForRetry(body)
+	if !changed {
+		return nil, nil
+	}
+	return retryResponsesRequest(c, info, adaptor, newBody, logMessage)
+}
+
 func extractReasoningSummaryText(summary any) string {
 	summaryParts, ok := summary.([]any)
 	if !ok {
@@ -259,6 +444,11 @@ func rewriteResponsesInputForRetry(body []byte, dropReasoning bool, summarizeRea
 				changed = true
 				continue
 			}
+			_, hasEncrypted := item["encrypted_content"]
+			if hasEncrypted {
+				delete(item, "encrypted_content")
+				changed = true
+			}
 			if summarizeReasoning {
 				summaryText := extractReasoningSummaryText(item["summary"])
 				if summaryText != "" {
@@ -267,6 +457,12 @@ func rewriteResponsesInputForRetry(body []byte, dropReasoning bool, summarizeRea
 						"role":    "assistant",
 						"content": "[Context Summary]\n" + summaryText,
 					})
+					changed = true
+					continue
+				}
+				// 带 encrypted_content 但无法提炼摘要的 reasoning 条目：
+				// 上游无法解密该内容，直接剥离整个条目，避免恢复链被卡住。
+				if hasEncrypted {
 					changed = true
 					continue
 				}
@@ -343,6 +539,48 @@ func retryResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, adaptor 
 		return httpResp, nil
 	}
 	return httpResp, service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+}
+
+// tryResponsesReasoningDowngrade 处理 responses 输入中历史 reasoning 条目
+// 无法被上游消费（encrypted_content 解密失败、summary 缺失等）的场景：
+// 先尝试 summarize 转成带摘要的 assistant 消息，无改动或重试失败时再整体
+// 剥离 reasoning 条目，每次改动后原地重试一次。返回重试响应；
+// 无 reasoning 条目或无需改动时返回 nil。
+func tryResponsesReasoningDowngrade(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.Adaptor, body []byte) (*http.Response, *types.NewAPIError) {
+	if !hasResponsesReasoningItems(body) {
+		return nil, nil
+	}
+	logger.LogWarn(c, "responses handler detected reasoning items; attempting proactive reasoning downgrade")
+	if newBody, changed := summarizeResponsesReasoningItemsForRetry(body); changed {
+		retryResp, retryErr := retryResponsesRequest(c, info, adaptor, newBody, "responses handler auto-recovery: proactively summarized reasoning items and retried upstream once")
+		if retryResp != nil && retryErr == nil {
+			return retryResp, nil
+		}
+		if retryErr != nil {
+			if newBody2, changed2 := stripResponsesReasoningItemsForRetry(newBody); changed2 {
+				retryResp2, retryErr2 := retryResponsesRequest(c, info, adaptor, newBody2, "responses handler auto-recovery: proactively stripped reasoning items and retried upstream once")
+				if retryResp2 != nil && retryErr2 == nil {
+					return retryResp2, nil
+				}
+				if retryErr2 != nil {
+					return nil, retryErr2
+				}
+			}
+			return nil, retryErr
+		}
+	}
+	// summarize 无改动（如 reasoning 条目只有 encrypted_content 且无摘要）时，
+	// 兜底整体剥离 reasoning 条目后再重试一次，避免恢复链被 changed=false 卡住。
+	if newBody2, changed2 := stripResponsesReasoningItemsForRetry(body); changed2 {
+		retryResp2, retryErr2 := retryResponsesRequest(c, info, adaptor, newBody2, "responses handler auto-recovery: proactively stripped reasoning items and retried upstream once")
+		if retryResp2 != nil && retryErr2 == nil {
+			return retryResp2, nil
+		}
+		if retryErr2 != nil {
+			return nil, retryErr2
+		}
+	}
+	return nil, nil
 }
 
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
@@ -448,8 +686,17 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			if storageErr == nil {
 				rawBody, readErr := storage.Bytes()
 				if readErr == nil {
+					if isResponsesEncryptedContentErrorMessage(newAPIError.Error()) {
+						if retryResp, retryErr := tryResponsesReasoningDowngrade(c, info, adaptor, rawBody); retryResp != nil && retryErr == nil {
+							httpResp = retryResp
+							goto RESPONSE_OK
+						} else if retryErr != nil {
+							newAPIError = retryErr
+						}
+					}
 					if isResponsesContentArrayErrorMessage(newAPIError.Error()) {
 						if newBody, changed := flattenResponsesContentArraysForRetry(rawBody); changed {
+							logger.LogWarn(c, "responses handler flatten input types: "+summarizeResponsesInputTypes(newBody))
 							retryResp, retryErr := retryResponsesRequest(c, info, adaptor, newBody, "responses handler auto-recovery: flattened input content arrays and retrying upstream once")
 							if retryResp != nil && retryErr == nil {
 								httpResp = retryResp
@@ -457,7 +704,45 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 							}
 							if retryErr != nil {
 								newAPIError = retryErr
-								if isResponsesReasoningSummaryErrorMessage(newAPIError.Error()) {
+								// flatten 后即使上游先返回其他 400，也可能在下一步被旧
+								// reasoning.encrypted_content 卡住；只要输入里仍含 reasoning item，
+								// 主动尝试 summary/strip，避免依赖特定错误文案才能进入恢复链。
+								reasoningDowngradeTried := false
+								if hasResponsesReasoningItems(newBody) {
+									reasoningDowngradeTried = true
+									logger.LogWarn(c, "responses handler detected reasoning items after flatten; attempting proactive reasoning downgrade")
+									if retryResp2, retryErr2 := tryResponsesReasoningDowngrade(c, info, adaptor, newBody); retryResp2 != nil && retryErr2 == nil {
+										httpResp = retryResp2
+										goto RESPONSE_OK
+									} else if retryErr2 != nil {
+										newAPIError = retryErr2
+									}
+								}
+								if !reasoningDowngradeTried && isResponsesEncryptedContentErrorMessage(newAPIError.Error()) {
+									if newBody2, changed2 := summarizeResponsesReasoningItemsForRetry(newBody); changed2 {
+										retryResp2, retryErr2 := retryResponsesRequest(c, info, adaptor, newBody2, "responses handler auto-recovery: flattened input, then summarized unverifiable encrypted reasoning items and retried upstream once")
+										if retryResp2 != nil && retryErr2 == nil {
+											httpResp = retryResp2
+											goto RESPONSE_OK
+										}
+										if retryErr2 != nil {
+											newAPIError = retryErr2
+											if isResponsesEncryptedContentErrorMessage(newAPIError.Error()) || isResponsesReasoningSummaryErrorMessage(newAPIError.Error()) {
+												if newBody3, changed3 := stripResponsesReasoningItemsForRetry(newBody2); changed3 {
+													retryResp3, retryErr3 := retryResponsesRequest(c, info, adaptor, newBody3, "responses handler auto-recovery: flattened input, then stripped unverifiable reasoning items and retried upstream once")
+													if retryResp3 != nil && retryErr3 == nil {
+														httpResp = retryResp3
+														goto RESPONSE_OK
+													}
+													if retryErr3 != nil {
+														newAPIError = retryErr3
+													}
+												}
+											}
+										}
+									}
+								}
+								if !reasoningDowngradeTried && isResponsesReasoningSummaryErrorMessage(newAPIError.Error()) {
 									if newBody2, changed2 := summarizeResponsesReasoningItemsForRetry(newBody); changed2 {
 										retryResp2, retryErr2 := retryResponsesRequest(c, info, adaptor, newBody2, "responses handler auto-recovery: summarized incompatible reasoning items and retrying upstream once")
 										if retryResp2 != nil && retryErr2 == nil {
@@ -482,6 +767,20 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 									}
 								}
 							}
+						}
+					}
+					// function_call/function_call_output 配对缺失自动恢复：
+					// 删除孤儿输出、为缺失响应的调用补占位后原地重试一次。
+					// 注意需在图片剥离前先处理：若清洗后重试仍报图片不支持，
+					// 会落到下方的图片剥离分支继续恢复。
+					if isResponsesToolPairingError(newAPIError.Error()) {
+						retryResp, retryErr := tryResponsesToolPairingRecovery(c, info, adaptor, rawBody, "responses handler auto-recovery: sanitized function_call/function_call_output pairing and retrying upstream once")
+						if retryResp != nil && retryErr == nil {
+							httpResp = retryResp
+							goto RESPONSE_OK
+						}
+						if retryErr != nil {
+							newAPIError = retryErr
 						}
 					}
 					if isResponsesImageUnsupportedError(newAPIError.Error()) {
@@ -509,6 +808,18 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 										if retryErr2 != nil {
 											newAPIError = retryErr2
 										}
+									}
+								}
+								// 图片剥离后重试仍可能报 tool 配对缺失，
+								// 再清洗一次 function_call/function_call_output 配对
+								if isResponsesToolPairingError(newAPIError.Error()) {
+									retryResp3, retryErr3 := tryResponsesToolPairingRecovery(c, info, adaptor, newBody, "responses handler auto-recovery: removed unsupported images, then sanitized tool pairing and retried upstream once")
+									if retryResp3 != nil && retryErr3 == nil {
+										httpResp = retryResp3
+										goto RESPONSE_OK
+									}
+									if retryErr3 != nil {
+										newAPIError = retryErr3
 									}
 								}
 							}
