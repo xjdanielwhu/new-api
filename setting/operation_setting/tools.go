@@ -234,50 +234,6 @@ func DeleteToolPriceForTest(name string) {
 }
 
 // ---------------------------------------------------------------------------
-// GPT Image 1 per-call pricing (special: depends on quality + size)
-// ---------------------------------------------------------------------------
-
-const (
-	GPTImage1Low1024x1024    = 0.011
-	GPTImage1Low1024x1536    = 0.016
-	GPTImage1Low1536x1024    = 0.016
-	GPTImage1Medium1024x1024 = 0.042
-	GPTImage1Medium1024x1536 = 0.063
-	GPTImage1Medium1536x1024 = 0.063
-	GPTImage1High1024x1024   = 0.167
-	GPTImage1High1024x1536   = 0.25
-	GPTImage1High1536x1024   = 0.25
-)
-
-func GetGPTImage1PriceOnceCall(quality string, size string) float64 {
-	prices := map[string]map[string]float64{
-		"low": {
-			"1024x1024": GPTImage1Low1024x1024,
-			"1024x1536": GPTImage1Low1024x1536,
-			"1536x1024": GPTImage1Low1536x1024,
-		},
-		"medium": {
-			"1024x1024": GPTImage1Medium1024x1024,
-			"1024x1536": GPTImage1Medium1024x1536,
-			"1536x1024": GPTImage1Medium1536x1024,
-		},
-		"high": {
-			"1024x1024": GPTImage1High1024x1024,
-			"1024x1536": GPTImage1High1024x1536,
-			"1536x1024": GPTImage1High1536x1024,
-		},
-	}
-
-	if qualityMap, exists := prices[quality]; exists {
-		if price, exists := qualityMap[size]; exists {
-			return price
-		}
-	}
-
-	return GPTImage1High1024x1024
-}
-
-// ---------------------------------------------------------------------------
 // Gemini audio input pricing (per-million tokens, model-specific)
 // ---------------------------------------------------------------------------
 

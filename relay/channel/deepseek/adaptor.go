@@ -1,7 +1,6 @@
 package deepseek
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -116,7 +115,7 @@ func applyDeepSeekV4OpenAIThinkingSuffix(info *relaycommon.RelayInfo, request *d
 		if info.ChannelMeta != nil {
 			info.UpstreamModelName = baseModel
 		}
-		info.ReasoningEffort = effort
+		info.SetReasoningEffort(effort)
 	}
 	return nil
 }
@@ -147,7 +146,7 @@ func applyDeepSeekV4ClaudeThinkingSuffix(info *relaycommon.RelayInfo, request *d
 		if info.ChannelMeta != nil {
 			info.UpstreamModelName = baseModel
 		}
-		info.ReasoningEffort = effort
+		info.SetReasoningEffort(effort)
 	}
 	return nil
 }
@@ -161,108 +160,33 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 	return nil, errors.New("not implemented")
 }
 
-func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	oaiAdaptor := openai.Adaptor{}
-	convertedRequest, err := oaiAdaptor.ConvertOpenAIResponsesRequest(c, info, request)
-	if err != nil {
-		return nil, err
-	}
-	responsesRequest, ok := convertedRequest.(dto.OpenAIResponsesRequest)
-	if !ok {
-		return convertedRequest, nil
-	}
-	responsesRequest.Input = normalizeDeepSeekResponsesInput(responsesRequest.Input)
-	modelName := responsesRequest.Model
+func (a *Adaptor) ConvertOpenAIResponsesRequest(_ *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
+	applyDeepSeekV4ResponsesThinkingSuffix(info, &request)
+	return request, nil
+}
+
+func applyDeepSeekV4ResponsesThinkingSuffix(info *relaycommon.RelayInfo, request *dto.OpenAIResponsesRequest) {
+	modelName := request.Model
 	if info != nil && info.ChannelMeta != nil && info.UpstreamModelName != "" {
 		modelName = info.UpstreamModelName
 	}
-	baseModel, thinkingType, effort, matched := reasoning.ParseDeepSeekV4ThinkingSuffix(modelName)
-	if !matched {
-		return responsesRequest, nil
-	}
-	responsesRequest.Model = baseModel
-	responsesRequest.EnableThinking = nil
-	responsesRequest.ThinkingBudget = nil
-	if thinkingType != "" {
-		thinking, marshalErr := common.Marshal(map[string]string{
-			"type": thinkingType,
-		})
-		if marshalErr != nil {
-			return nil, fmt.Errorf("error marshalling thinking: %w", marshalErr)
+	baseModel, thinkingType, effort, ok := reasoning.ParseDeepSeekV4ThinkingSuffix(modelName)
+	if ok {
+		if thinkingType == "disabled" {
+			effort = "none"
 		}
-		responsesRequest.EnableThinking = thinking
-	}
-	if effort != "" {
-		responsesRequest.ThinkingBudget = common.StringToByteSlice(fmt.Sprintf("\"%s\"", effort))
-		responsesRequest.Reasoning = &dto.Reasoning{Effort: effort}
-		if info != nil {
-			info.ReasoningEffort = effort
+		request.Model = baseModel
+		if request.Reasoning == nil {
+			request.Reasoning = &dto.Reasoning{}
+		}
+		request.Reasoning.Effort = effort
+		if info != nil && info.ChannelMeta != nil {
+			info.UpstreamModelName = baseModel
 		}
 	}
-	if info != nil && info.ChannelMeta != nil {
-		info.UpstreamModelName = baseModel
+	if info != nil && request.Reasoning != nil {
+		info.SetReasoningEffort(request.Reasoning.Effort)
 	}
-	return responsesRequest, nil
-}
-
-func normalizeDeepSeekResponsesInput(input json.RawMessage) json.RawMessage {
-	if len(input) == 0 {
-		return input
-	}
-	var items []map[string]any
-	if err := common.Unmarshal(input, &items); err != nil {
-		return input
-	}
-	modified := false
-	for _, item := range items {
-		itemType, _ := item["type"].(string)
-		if itemType != "message" {
-			continue
-		}
-		content, ok := item["content"]
-		if !ok {
-			continue
-		}
-		parts, ok := content.([]any)
-		if !ok {
-			continue
-		}
-		if len(parts) == 0 {
-			item["content"] = ""
-			modified = true
-			continue
-		}
-		texts := make([]string, 0, len(parts))
-		convertible := true
-		for _, partAny := range parts {
-			part, ok := partAny.(map[string]any)
-			if !ok {
-				convertible = false
-				break
-			}
-			partType, _ := part["type"].(string)
-			switch partType {
-			case "input_text":
-				text, _ := part["text"].(string)
-				texts = append(texts, text)
-			default:
-				convertible = false
-			}
-		}
-		if !convertible {
-			continue
-		}
-		item["content"] = strings.Join(texts, "\n")
-		modified = true
-	}
-	if !modified {
-		return input
-	}
-	sanitized, err := common.Marshal(items)
-	if err != nil {
-		return input
-	}
-	return sanitized
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {

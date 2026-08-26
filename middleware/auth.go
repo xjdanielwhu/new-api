@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -373,7 +374,8 @@ func TokenAuth() func(c *gin.Context) {
 			}
 		}
 		// gemini api 从query中获取key
-		if strings.HasPrefix(c.Request.URL.Path, "/v1beta/models") ||
+		if c.Request.URL.Path == "/v1/models" ||
+			strings.HasPrefix(c.Request.URL.Path, "/v1beta/models") ||
 			strings.HasPrefix(c.Request.URL.Path, "/v1beta/openai/models") ||
 			strings.HasPrefix(c.Request.URL.Path, "/v1/models/") {
 			skKey := c.Query("key")

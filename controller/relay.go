@@ -25,6 +25,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/samber/lo"
 
@@ -49,6 +50,8 @@ func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIErro
 		err = relay.EmbeddingHelper(c, info)
 	case relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact:
 		err = relay.ResponsesHelper(c, info)
+	case relayconstant.RelayModeAlphaSearch:
+		err = relay.AlphaSearchHelper(c, info)
 	default:
 		err = relay.TextHelper(c, info)
 	}
@@ -88,7 +91,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	defer func() {
 		if newAPIError != nil {
-			logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))
+			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
@@ -179,10 +182,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}()
 
 	retryParam := &service.RetryParam{
-		Ctx:        c,
-		TokenGroup: relayInfo.TokenGroup,
-		ModelName:  relayInfo.OriginModelName,
-		Retry:      common.GetPointer(0),
+		Ctx:         c,
+		TokenGroup:  relayInfo.TokenGroup,
+		ModelName:   relayInfo.OriginModelName,
+		RequestPath: c.Request.URL.Path,
+		Retry:       common.GetPointer(0),
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
@@ -412,7 +416,7 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 }
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
-	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
+	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.Error())))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
 	if service.ShouldDisableChannel(err) && channelError.AutoBan {
@@ -565,10 +569,11 @@ func RelayTask(c *gin.Context) {
 	}()
 
 	retryParam := &service.RetryParam{
-		Ctx:        c,
-		TokenGroup: relayInfo.TokenGroup,
-		ModelName:  relayInfo.OriginModelName,
-		Retry:      common.GetPointer(0),
+		Ctx:         c,
+		TokenGroup:  relayInfo.TokenGroup,
+		ModelName:   relayInfo.OriginModelName,
+		RequestPath: c.Request.URL.Path,
+		Retry:       common.GetPointer(0),
 	}
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {

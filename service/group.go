@@ -8,7 +8,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -107,18 +106,7 @@ func GetRequestAutoGroups(c *gin.Context, userGroup string) []string {
 	return FilterUserTokenAutoGroups(userGroup, groups)
 }
 
-// GetUserGroupRatio 获取用户使用某个分组的倍率
-// userGroup 用户分组
-// group 需要获取倍率的分组
-func GetUserGroupRatio(userGroup, group string) float64 {
-	ratio, ok := ratio_setting.GetGroupGroupRatio(userGroup, group)
-	if ok {
-		return ratio
-	}
-	return ratio_setting.GetGroupRatio(group)
-}
-
-// GetGroupsEnabledModels 汇总多个分组下已启用的模型，按首次出现顺序去重。
+// GetGroupsEnabledModels 按 groups 顺序获取各分组启用的模型并去重
 func GetGroupsEnabledModels(groups []string) []string {
 	seen := make(map[string]struct{})
 	models := make([]string, 0)
@@ -131,4 +119,15 @@ func GetGroupsEnabledModels(groups []string) []string {
 		}
 	}
 	return models
+}
+
+// GetUserGroupRatio 获取用户使用某个分组的倍率
+// userGroup 用户分组
+// group 需要获取倍率的分组
+func GetUserGroupRatio(userGroup, group string) float64 {
+	ratio, ok := ratio_setting.GetGroupGroupRatio(userGroup, group)
+	if ok {
+		return ratio
+	}
+	return ratio_setting.GetGroupRatio(group)
 }

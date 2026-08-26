@@ -8,14 +8,5 @@ docs
 .eslintcache
 .gocache
 /web/node_modules
-/web/default/node_modules
-/web/classic/node_modules
-# 本地产物与运行数据，不参与镜像构建
-/runtime-data
-/data
-/logs
-*.tar
-*.db
-/.wy-patches
-/web/default/dist
-/web/classic/dist
+/web/dist
+!THIRD-PARTY-LICENSES.md

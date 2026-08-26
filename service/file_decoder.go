@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/types"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -84,7 +85,7 @@ func GetFileTypeFromUrl(c *gin.Context, url string, reason ...string) (string, e
 	var readData []byte
 	limits := []int{512, 8 * 1024, 24 * 1024, 64 * 1024}
 	for _, limit := range limits {
-		logger.LogDebug(c, fmt.Sprintf("Trying to read %d bytes to determine file type", limit))
+		logger.LogDebug(c, "Trying to read %d bytes to determine file type", limit)
 		if len(readData) < limit {
 			need := limit - len(readData)
 			tmp := make([]byte, need)

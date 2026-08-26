@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -81,11 +82,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
-	var (
-		sawCompleted  bool
-		lastEventType string
-		streamFailLog string
-	)
 	imageCounter := &relaycommon.ImageGenerationCallCounter{}
 	imageCommitted := false
 
@@ -98,11 +94,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Error(err)
 			return
 		}
-		lastEventType = streamResponse.Type
 		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {
 		case "response.completed", "response.done":
-			sawCompleted = true
 			if streamResponse.Response != nil {
 				if streamResponse.Response.Usage != nil {
 					if streamResponse.Response.Usage.InputTokens != 0 {
@@ -122,37 +116,30 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				if !imageCommitted {
 					if relaycommon.IsNonBillableResponsesStatus(streamResponse.Response.Status) {
 						imageCounter.Reset()
+						imageCounter.Commit(info)
+						imageCommitted = true
 					} else {
 						for i := range streamResponse.Response.Output {
 							idx := i
 							imageCounter.Observe(&streamResponse.Response.Output[i], &idx)
 						}
+						imageCounter.Commit(info)
+						imageCommitted = true
 					}
-					imageCounter.Commit(info)
-					imageCommitted = true
 				}
 			} else if !imageCommitted {
 				imageCounter.Commit(info)
 				imageCommitted = true
 			}
-			// OpenAI 流式响应在 response.completed 后结束，主动标记完成避免等待上游 EOF 时客户端已断开
-			sr.Done()
-			return
-		case "response.output_text.delta":
-			// 处理输出文本
-			responseTextBuilder.WriteString(streamResponse.Delta)
-		case "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
-			// 上游异常结束事件：截取原始内容，流中断时输出到日志便于定位原因
-			//（如上游会话数超限、额度不足等会以 response.failed/error 事件下发）
-			streamFailLog = data
-			if len(streamFailLog) > 512 {
-				streamFailLog = streamFailLog[:512] + "..."
-			}
+		case "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
 			if !imageCommitted {
 				imageCounter.Reset()
 				imageCounter.Commit(info)
 				imageCommitted = true
 			}
+		case "response.output_text.delta":
+			// 处理输出文本
+			responseTextBuilder.WriteString(streamResponse.Delta)
 		case dto.ResponsesOutputTypeItemDone:
 			if streamResponse.Item != nil {
 				switch streamResponse.Item.Type {
@@ -170,17 +157,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 	})
-
-	// 流未收到 response.completed 即结束（上游中断/超时/客户端断开等），
-	// 输出诊断日志：结束原因、已转发事件数、最后一个事件类型及上游错误事件内容
-	if !sawCompleted {
-		endSummary := "unknown"
-		if info.StreamStatus != nil {
-			endSummary = info.StreamStatus.Summary()
-		}
-		logger.LogError(c, fmt.Sprintf("responses stream ended without response.completed: %s, received=%d, last_event=%s, upstream_fail_event=%s",
-			endSummary, info.ReceivedResponseCount, lastEventType, streamFailLog))
-	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
+
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
@@ -213,6 +215,16 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 			s.tokenConsumed = 0
 		}
 		// TODO: model 层应定义哨兵错误（如 ErrNoActiveSubscription），用 errors.Is 替代字符串匹配
+		if errors.Is(err, ErrInsufficientWalletQuota) {
+			userQuota, quotaErr := model.GetUserQuota(s.relayInfo.UserId, false)
+			if quotaErr != nil {
+				userQuota = 0
+			}
+			return types.NewErrorWithStatusCode(
+				fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)),
+				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
+				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "no active subscription") || strings.Contains(errMsg, "subscription quota insufficient") {
 			return types.NewErrorWithStatusCode(fmt.Errorf("订阅额度不足或未配置订阅: %s", errMsg), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
@@ -428,7 +440,15 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		session, apiErr := trySubscription()
 		if apiErr != nil {
 			if apiErr.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
-				return tryWallet()
+				// 仅当用户的活跃订阅允许钱包回退时才回退到钱包，否则返回订阅额度不足错误
+				allowOverflow, overflowErr := model.UserActiveSubscriptionsAllowWalletOverflow(relayInfo.UserId)
+				if overflowErr != nil {
+					return nil, types.NewError(overflowErr, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+				}
+				if allowOverflow {
+					return tryWallet()
+				}
+				return nil, apiErr
 			}
 			return nil, apiErr
 		}

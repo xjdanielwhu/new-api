@@ -134,9 +134,8 @@ func DeleteUserOAuthBinding(userId, providerId int) error {
 	return DB.Where("user_id = ? AND provider_id = ?", userId, providerId).Delete(&UserOAuthBinding{}).Error
 }
 
-// DeleteUserOAuthBindingsByUserId deletes all OAuth bindings for a user
-func DeleteUserOAuthBindingsByUserId(userId int) error {
-	return DB.Where("user_id = ?", userId).Delete(&UserOAuthBinding{}).Error
+func deleteUserOAuthBindingsByUserId(tx *gorm.DB, userId int) error {
+	return tx.Where("user_id = ?", userId).Delete(&UserOAuthBinding{}).Error
 }
 
 // GetBindingCountByProviderId returns the number of bindings for a provider
@@ -144,10 +143,4 @@ func GetBindingCountByProviderId(providerId int) (int64, error) {
 	var count int64
 	err := DB.Model(&UserOAuthBinding{}).Where("provider_id = ?", providerId).Count(&count).Error
 	return count, err
-}
-
-// deleteUserOAuthBindingsByUserId 在调用方的事务内删除绑定，供用户硬删除流程
-// 与其余认证数据在同一事务中清理。
-func deleteUserOAuthBindingsByUserId(tx *gorm.DB, userId int) error {
-	return tx.Where("user_id = ?", userId).Delete(&UserOAuthBinding{}).Error
 }

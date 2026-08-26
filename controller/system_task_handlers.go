@@ -9,23 +9,67 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
-// RegisterScheduledSystemTasks 把上游模型更新与异步任务轮询接入系统任务框架，
-// 由数据库租约在多实例间去重，且每轮执行都记录为一条任务行。
-// 需在 service.StartSystemTaskRunner 之前调用。
-//
-// 注意：channel_test 暂未接入。上游的 runChannelTestTask 依赖 relaykit/dto 与
-// relaykit/types，并改动了 testChannel 的签名与计费类型，将在 relaykit 专项迁移
-// 中一并处理。当前渠道定时测试仍由 AutomaticallyTestChannels 独立循环执行，
-// 功能不受影响，只是不在系统任务面板中显示。
+// RegisterScheduledSystemTasks wires the periodic channel test, upstream model
+// update, and async task polling (Midjourney / Suno / video) jobs into the
+// system task framework so a DB lease dedups execution across multiple master
+// instances and each run is recorded as one task row. Call this before
+// service.StartSystemTaskRunner.
 func RegisterScheduledSystemTasks() {
+	service.RegisterSystemTaskHandler(channelTestHandler{})
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
 }
 
-// modelUpdateHandler 执行上游模型更新检测的定时任务。
+// channelTestHandler runs the scheduled "test all channels" job. Enablement and
+// cadence still come from the monitor settings; only the execution path moved
+// into the system task runner.
+type channelTestHandler struct{}
+
+func (channelTestHandler) Type() string { return model.SystemTaskTypeChannelTest }
+
+func (channelTestHandler) Enabled() bool {
+	return operation_setting.GetMonitorSetting().AutoTestChannelEnabled
+}
+
+func (channelTestHandler) Interval() time.Duration {
+	minutes := operation_setting.GetMonitorSetting().AutoTestChannelMinutes
+	if minutes <= 0 {
+		minutes = 10
+	}
+	return time.Duration(minutes * float64(time.Minute))
+}
+
+func (channelTestHandler) NewPayload() any { return nil }
+
+// channelTestTaskPayload controls one channel_test run. A nil/empty payload is a
+// scheduled run, which uses the configured monitor ChannelTestMode and does not
+// notify. A manual "test all channels" trigger sets Mode=scheduled_all and
+// Notify=true to reproduce the legacy manual behavior (test every channel and
+// notify root on completion).
+type channelTestTaskPayload struct {
+	Mode   string `json:"mode,omitempty"`
+	Notify bool   `json:"notify,omitempty"`
+}
+
+func (channelTestHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	payload := channelTestTaskPayload{}
+	if err := task.DecodePayload(&payload); err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	summary, err := runChannelTestTask(ctx, payload.Mode, payload.Notify, service.NewSystemTaskProgressReporter(task, runnerID))
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+}
+
+// modelUpdateHandler runs the scheduled upstream model update detection job.
 type modelUpdateHandler struct{}
 
 func (modelUpdateHandler) Type() string { return model.SystemTaskTypeModelUpdate }
@@ -47,13 +91,30 @@ func (modelUpdateHandler) Interval() time.Duration {
 
 func (modelUpdateHandler) NewPayload() any { return nil }
 
-func (modelUpdateHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
-	runChannelUpstreamModelUpdateTaskOnce()
-	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, nil, nil)
+// modelUpdateTaskPayload controls one model_update run. A scheduled run
+// (Manual=false) respects the per-channel minimum check interval and may
+// auto-apply detected models when a channel has auto-sync enabled. A manual
+// "detect all" trigger sets Manual=true to reproduce the legacy detect-all
+// semantics: force a re-check regardless of the interval and never auto-apply,
+// so the admin reviews and applies changes explicitly.
+type modelUpdateTaskPayload struct {
+	Manual bool `json:"manual,omitempty"`
 }
 
-// midjourneyPollHandler 每轮执行一次 Midjourney 轮询。Enabled() 把「是否存在
-// 未完成任务」并入启用判定，系统空闲时调度器不会创建任务行。
+func (modelUpdateHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	payload := modelUpdateTaskPayload{}
+	if err := task.DecodePayload(&payload); err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	summary := runChannelUpstreamModelUpdateTaskOnce(ctx, payload.Manual, !payload.Manual, service.NewSystemTaskProgressReporter(task, runnerID))
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+}
+
+// midjourneyPollHandler runs one Midjourney polling pass per scheduled run.
+// Enabled() folds the "are there unfinished tasks?" check into enablement so the
+// scheduler creates no row when the system is idle; only when at least one
+// Midjourney task is in progress does a row get scheduled.
 type midjourneyPollHandler struct{}
 
 func (midjourneyPollHandler) Type() string { return model.SystemTaskTypeMidjourneyPoll }
@@ -71,7 +132,9 @@ func (midjourneyPollHandler) Run(ctx context.Context, task *model.SystemTask, ru
 	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 
-// asyncTaskPollHandler 每轮执行一次异步任务（Suno / 视频）轮询。
+// asyncTaskPollHandler runs one async-task (Suno/video) polling pass per
+// scheduled run. Like midjourneyPollHandler, Enabled() folds in the unfinished
+// task existence check so an idle system schedules no rows.
 type asyncTaskPollHandler struct{}
 
 func (asyncTaskPollHandler) Type() string { return model.SystemTaskTypeAsyncTaskPoll }

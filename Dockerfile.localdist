@@ -3,7 +3,7 @@
 # frontend inside a container.
 #
 # Build prerequisites:
-#   cd web/default && bun install && bun run build
+#   cd web && bun install && bun run build
 #   cd web/classic && bun install && bun run build
 #
 # Build command:
