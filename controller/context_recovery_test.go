@@ -414,3 +414,59 @@ func testCompressPNGDataURL(t *testing.T, w, h int) string {
 	}
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
 }
+
+func TestIsReasoningEffortWithToolsError(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+		want bool
+	}{
+		{
+			name: "gpt-5.4 chat rejection",
+			msg:  "Function tools with reasoning_effort are not supported for gpt-5.4 in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.",
+			want: true,
+		},
+		{
+			name: "lowercase variant",
+			msg:  "function tools with reasoning_effort are not supported",
+			want: true,
+		},
+		{
+			name: "unrelated error",
+			msg:  "The model does not support images",
+			want: false,
+		},
+		{
+			name: "tool pairing error",
+			msg:  "No tool output found for tool call call_02_9r7hnOiZfy9N67N7azD82137",
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		if got := isReasoningEffortWithToolsError(tc.msg); got != tc.want {
+			t.Fatalf("%s: got %v want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestReasoningEffortDowngradeMutatesBody(t *testing.T) {
+	raw := []byte(`{"model":"gpt-5.4","reasoning_effort":"high","tools":[{"type":"function","function":{"name":"get_weather"}}],"messages":[{"role":"user","content":"hi"}]}`)
+	var reqMap map[string]any
+	if err := common.Unmarshal(raw, &reqMap); err != nil {
+		t.Fatal(err)
+	}
+	effort, ok := reqMap["reasoning_effort"].(string)
+	if !ok || !strings.EqualFold(effort, "high") {
+		t.Fatalf("expected reasoning_effort=high, got %v", reqMap["reasoning_effort"])
+	}
+	if _, hasTools := reqMap["tools"]; !hasTools {
+		t.Fatal("expected tools present")
+	}
+	reqMap["reasoning_effort"] = "none"
+	if effort, _ := reqMap["reasoning_effort"].(string); !strings.EqualFold(effort, "none") {
+		t.Fatalf("expected reasoning_effort downgraded to none, got %v", reqMap["reasoning_effort"])
+	}
+	if _, hasTools := reqMap["tools"]; !hasTools {
+		t.Fatal("expected tools preserved after downgrade")
+	}
+}

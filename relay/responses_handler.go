@@ -45,6 +45,29 @@ func isResponsesEncryptedContentErrorMessage(msg string) bool {
 			strings.Contains(msg, "could not be parsed"))
 }
 
+// stripResponsesPreviousResponseIDForRetry 剥离请求中的 previous_response_id 引用。
+// 当客户端引用含加密 reasoning 的历史会话（如老对话切换模型后继续会话）且上游
+// 无法解密历史内容时，去掉该引用、保留当前 input 重试一次，作为最后手段恢复对话。
+func stripResponsesPreviousResponseIDForRetry(body []byte) ([]byte, bool) {
+	var reqMap map[string]any
+	if err := common.Unmarshal(body, &reqMap); err != nil {
+		return nil, false
+	}
+	prev, ok := reqMap["previous_response_id"]
+	if !ok || prev == nil {
+		return nil, false
+	}
+	if s, _ := prev.(string); s == "" {
+		return nil, false
+	}
+	delete(reqMap, "previous_response_id")
+	newBody, err := common.Marshal(reqMap)
+	if err != nil {
+		return nil, false
+	}
+	return newBody, true
+}
+
 var responsesContextOverflowPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)maximum context length is (\d+) tokens`),
 	regexp.MustCompile(`(?i)configured limit of (\d+) tokens`),
@@ -692,6 +715,18 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 							goto RESPONSE_OK
 						} else if retryErr != nil {
 							newAPIError = retryErr
+						}
+						// 兜底：请求体无内联 reasoning 可处理或降级重试仍失败时，
+						// 若携带 previous_response_id（历史含无法解密的加密内容），
+						// 剥离该引用后保留当前 input 重试一次，避免对话无法恢复。
+						if newBody, changed := stripResponsesPreviousResponseIDForRetry(rawBody); changed {
+							logger.LogWarn(c, "responses handler auto-recovery: dropped previous_response_id (unverifiable encrypted history) and retried upstream once")
+							if retryResp, retryErr := retryResponsesRequest(c, info, adaptor, newBody, "responses handler auto-recovery: dropped previous_response_id history and retried upstream once"); retryResp != nil && retryErr == nil {
+								httpResp = retryResp
+								goto RESPONSE_OK
+							} else if retryErr != nil {
+								newAPIError = retryErr
+							}
 						}
 					}
 					if isResponsesContentArrayErrorMessage(newAPIError.Error()) {

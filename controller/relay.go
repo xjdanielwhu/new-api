@@ -283,6 +283,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = relayHandler(c, relayInfo)
 		}
 
+		// 上游拒绝 function tools + reasoning_effort（如 gpt-5.4 在
+		// /v1/chat/completions 中不允许该组合）：将 reasoning_effort 降级为
+		// none 后原地重试一次，保留 tools 以维持 function call 能力
+		if newAPIError != nil && relayFormat == types.RelayFormatOpenAI &&
+			relayInfo.RelayMode == relayconstant.RelayModeChatCompletions &&
+			tryReasoningEffortWithToolsRecovery(c, relayInfo, newAPIError) {
+			newAPIError = relayHandler(c, relayInfo)
+		}
+
 		if newAPIError == nil {
 			relayInfo.LastError = nil
 			return

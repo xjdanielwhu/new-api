@@ -388,3 +388,31 @@ func TestHasResponsesReasoningItems(t *testing.T) {
 		t.Fatal("expected no reasoning items")
 	}
 }
+
+func TestStripResponsesPreviousResponseIDForRetry(t *testing.T) {
+	withPrev := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_123","input":[{"type":"message","role":"user","content":"hi"}]}`)
+	newBody, changed := stripResponsesPreviousResponseIDForRetry(withPrev)
+	if !changed {
+		t.Fatal("expected previous_response_id stripped")
+	}
+	var reqMap map[string]any
+	if err := common.Unmarshal(newBody, &reqMap); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := reqMap["previous_response_id"]; exists {
+		t.Fatal("expected previous_response_id removed")
+	}
+	if _, exists := reqMap["input"]; !exists {
+		t.Fatal("expected input preserved")
+	}
+
+	withoutPrev := []byte(`{"model":"gpt-5.4","input":[{"type":"message","role":"user","content":"hi"}]}`)
+	if _, changed := stripResponsesPreviousResponseIDForRetry(withoutPrev); changed {
+		t.Fatal("expected no change without previous_response_id")
+	}
+
+	emptyPrev := []byte(`{"model":"gpt-5.4","previous_response_id":"","input":[{"type":"message","role":"user","content":"hi"}]}`)
+	if _, changed := stripResponsesPreviousResponseIDForRetry(emptyPrev); changed {
+		t.Fatal("expected no change with empty previous_response_id")
+	}
+}

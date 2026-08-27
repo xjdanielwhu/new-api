@@ -882,3 +882,77 @@ func tryImageUnsupportedRecovery(c *gin.Context, info *relaycommon.RelayInfo, ap
 	logger.LogWarn(c, fmt.Sprintf("上游不支持图片输入，已移除 %d 张图片（占位提示）并重试", removed))
 	return true
 }
+
+const reasoningEffortRecoveredKey = "reasoning_effort_tools_recovered"
+
+// 匹配上游在 chat/completions 中拒绝 function tools + reasoning_effort 组合的错误，
+// 例如 gpt-5.4:
+// "Function tools with reasoning_effort are not supported for gpt-5.4 in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'."
+var reasoningEffortWithToolsPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)function tools.{0,40}reasoning_effort.{0,40}not supported`),
+	regexp.MustCompile(`(?i)reasoning_effort.{0,40}function tools.{0,40}not supported`),
+}
+
+func isReasoningEffortWithToolsError(msg string) bool {
+	for _, pattern := range reasoningEffortWithToolsPatterns {
+		if pattern.MatchString(msg) {
+			return true
+		}
+	}
+	return false
+}
+
+// tryReasoningEffortWithToolsRecovery 检测上游"function tools 与 reasoning_effort
+// 不兼容"错误（如 gpt-5.4 在 /v1/chat/completions 中不允许两者同时使用），
+// 将 reasoning_effort 显式降级为 none 后原地重试一次，保留 tools 以维持
+// function call 能力；仅请求带 tools 且非 none 时触发，不影响其他场景。
+func tryReasoningEffortWithToolsRecovery(c *gin.Context, info *relaycommon.RelayInfo, apiErr *types.NewAPIError) bool {
+	if !constant.ContextOverflowAutoRecovery || apiErr == nil || info == nil {
+		return false
+	}
+	if c.GetBool(reasoningEffortRecoveredKey) {
+		return false
+	}
+	if !isReasoningEffortWithToolsError(apiErr.Error()) {
+		return false
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return false
+	}
+	raw, err := storage.Bytes()
+	if err != nil {
+		return false
+	}
+	var reqMap map[string]any
+	if err := common.Unmarshal(raw, &reqMap); err != nil {
+		return false
+	}
+	if _, hasTools := reqMap["tools"]; !hasTools {
+		return false
+	}
+	if effort, ok := reqMap["reasoning_effort"].(string); ok && strings.EqualFold(effort, "none") {
+		return false
+	}
+	reqMap["reasoning_effort"] = "none"
+	newBody, err := common.Marshal(reqMap)
+	if err != nil {
+		return false
+	}
+	if info.Request != nil {
+		if err := common.Unmarshal(newBody, info.Request); err != nil {
+			return false
+		}
+	}
+	newStorage, err := common.CreateBodyStorage(newBody)
+	if err != nil {
+		return false
+	}
+	_ = storage.Close()
+	c.Set(common.KeyBodyStorage, newStorage)
+	c.Request.Body = io.NopCloser(newStorage)
+	c.Set(reasoningEffortRecoveredKey, true)
+	c.Header("X-Reasoning-Effort-Downgraded", "none")
+	logger.LogWarn(c, "上游拒绝 function tools + reasoning_effort，已将 reasoning_effort 降级为 none 并原地重试（保留 tools）")
+	return true
+}
