@@ -58,6 +58,16 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		return fmt.Sprintf("%s/api/anthropic/v1/messages", baseURL), nil
 	default:
 		switch info.RelayMode {
+		case relayconstant.RelayModeResponses:
+			if hasSpecialPlan && specialPlan.OpenAIBaseURL != "" {
+				return fmt.Sprintf("%s/responses", specialPlan.OpenAIBaseURL), nil
+			}
+			return fmt.Sprintf("%s/api/v1/responses", baseURL), nil
+		case relayconstant.RelayModeResponsesCompact:
+			if hasSpecialPlan && specialPlan.OpenAIBaseURL != "" {
+				return fmt.Sprintf("%s/responses/compact", specialPlan.OpenAIBaseURL), nil
+			}
+			return fmt.Sprintf("%s/api/v1/responses/compact", baseURL), nil
 		case relayconstant.RelayModeEmbeddings:
 			if hasSpecialPlan && specialPlan.OpenAIBaseURL != "" {
 				return fmt.Sprintf("%s/embeddings", specialPlan.OpenAIBaseURL), nil
@@ -102,8 +112,7 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	// TODO implement me
-	return nil, errors.New("not implemented")
+	return request, nil
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
