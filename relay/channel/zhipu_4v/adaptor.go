@@ -24,11 +24,18 @@ import (
 type Adaptor struct {
 }
 
+// isGlm53Model 判断是否为 GLM-5.3 系列模型（精确匹配或带连字符后缀，
+// 避免误匹配 glm-5.32、glm-5.30 等其他模型名）。
+func isGlm53Model(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	return m == "glm-5.3" || strings.HasPrefix(m, "glm-5.3-")
+}
+
 // normalizeGlm53ReasoningEffort 修正 GLM-5.3 的思考参数：该模型始终开启思考，
 // 仅支持 reasoning_effort=low/high/max，不接受 none/disabled 等其他值。
 // 无效值统一降级为 low（官方迁移建议），避免上游拒绝请求。
 func normalizeGlm53ReasoningEffort(model string, effort string) string {
-	if !strings.Contains(strings.ToLower(model), "glm-5.3") {
+	if !isGlm53Model(model) {
 		return effort
 	}
 	lower := strings.ToLower(effort)
