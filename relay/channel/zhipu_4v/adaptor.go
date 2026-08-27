@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
+	"strings"
 
 	channelconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel"
@@ -20,6 +22,23 @@ import (
 )
 
 type Adaptor struct {
+}
+
+// normalizeGlm53ReasoningEffort 修正 GLM-5.3 的思考参数：该模型始终开启思考，
+// 仅支持 reasoning_effort=low/high/max，不接受 none/disabled 等其他值。
+// 无效值统一降级为 low（官方迁移建议），避免上游拒绝请求。
+func normalizeGlm53ReasoningEffort(model string, effort string) string {
+	if !strings.Contains(strings.ToLower(model), "glm-5.3") {
+		return effort
+	}
+	lower := strings.ToLower(effort)
+	if lower == "" || slices.Contains([]string{"none", "disabled", "off"}, lower) {
+		return "low"
+	}
+	if !slices.Contains([]string{"low", "high", "max"}, lower) {
+		return "low"
+	}
+	return effort
 }
 
 func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeminiChatRequest) (any, error) {
@@ -100,6 +119,9 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	if lo.FromPtrOr(request.TopP, 0) >= 1 {
 		request.TopP = lo.ToPtr(0.99)
 	}
+	if request.ReasoningEffort != "" {
+		request.ReasoningEffort = normalizeGlm53ReasoningEffort(info.UpstreamModelName, request.ReasoningEffort)
+	}
 	return requestOpenAI2Zhipu(*request), nil
 }
 
@@ -112,6 +134,9 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
+	if request.Reasoning != nil && request.Reasoning.Effort != "" {
+		request.Reasoning.Effort = normalizeGlm53ReasoningEffort(info.UpstreamModelName, request.Reasoning.Effort)
+	}
 	return request, nil
 }
 
