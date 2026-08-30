@@ -56,6 +56,32 @@ web/             — Frontend themes container
 - 远端 `image: new-api-v2:local`；`docker load` 会把原同名镜像重命名为悬空 ID，部署前/后建议在远端补回滚 tag：`docker tag new-api-v2:local new-api-v2:local.bak-YYYYMMDD`；回滚：`docker tag new-api-v2:local.bak-YYYYMMDD new-api-v2:local && cd /home/new-api-v2 && docker compose up -d --force-recreate new-api-v2`。
 - 远端 `/home/new-api-v2` 不是 git 检出，代码仅通过镜像更新。
 
+### Codex 客户端接入排查（`/v1/responses` 401 Invalid token）
+
+- 现象：新版 Codex Desktop（如 Windows `26.820.71523`）调 `/v1/responses` 报 `401 Invalid token (request id: ...)`，老客户端正常；同一客户端 `/v1/chat/completions` 正常（说明 key 有效）。
+- 根因：客户端 `config.toml` 的 `[model_providers.custom]` 缺少 `requires_openai_auth = true` 时，responses 请求不带任何凭证（Authorization / x-api-key / cookie 全空）；new-api 认证中间件（`middleware/auth.go` `TokenAuth`）对无凭证请求返回 401，且认证失败不写入 logs 表（库里查不到记录）。
+- 修复：客户端配置补上 `requires_openai_auth = true`，并确保 `auth.json` 有 `OPENAI_API_KEY`（`sk-` 开头）。
+- 排查手段：在 oc 服务器 nginx 临时加 `log_format` 记录 `$http_authorization` / `$http_x_api_key` / `$http_cookie`，让客户端复现一次即可定位；确认后还原配置并删除日志。
+
+### 排查环境连接信息（内部凭据，禁止进入上游 PR）
+
+- Windows Codex 客户端主机（SSH）：`192.168.50.139`，用户 `Administrator`，密码 `tisson2007!`；Python 3.12，日志查询脚本 `C:\Users\Administrator\q_logs.py`（脚本源备份于本机 `/tmp/q_logs.py`）。
+- oc 服务器：`43.162.102.227`（部署目录 `/home/new-api-v2`）；应用日志库：`docker exec mysql mysql -unewapi_v2 -pxfpp2f99 new-api-v2`。
+- zh 服务器：`124.220.165.189`（部署目录 `/home/new-api-v2`）。
+- 本地开发 MySQL：`root` / `123456`。
+- 注意：以上为主机/数据库凭据，仅供本仓库本地排查；向官方上游提交 PR 时不得包含本小节内容。
+
+### 排查结论：Codex 调 glm-5.3 responses 报 context window 不可恢复（已定位并修复）
+
+- 现象：Windows Codex 大会话调 glm-5.3 `/v1/responses`，报 `Codex ran out of room in the model's context window` 且无法恢复（客户端收到 `error.code=context_length_exceeded` 后把 total_tokens 永久标记为 258400 full，见 `turn.rs:1427` `set_total_tokens_full`）。
+- 根因（已实证）：客户端在某轮调用 `view_image` 工具后，把 **base64 编码的 PNG 图片**（约 1334×1888，base64 数 MB）写进下一个 responses 请求的 `input`（`function_call_output.output` 里的 `input_image`）；glm-5.3 是纯文本模型，智谱 responses 端点不报"不支持图片"，而是因请求体膨胀超过上限返回 `context_length_exceeded` / "Prompt exceeds max length"（流式时为 HTTP 200 + SSE `response.failed`，new-api 原样透传；oc 日志 `stream ended: reason=done`、quota=0）。会话 01a032a8 证据备份 `/tmp/win-rollout-big.jsonl`，oc logs id 16284/16286，nginx 12:31:19 返回 200/422 字节。
+- 修复（`relay/responses_handler.go`，分支 `sync/frontend-20260805` 未提交）：
+  - 主动：zhipu-v4 渠道（type=26）且模型为 glm-5.3（`isTextOnlyResponsesModel`）时，发送上游前用 `stripResponsesImagesForUnsupportedRetry` 剥离 `input_image` 并替换为占位文本（`X-Images-Removed` 响应头、`LogWarn` 记录）。
+  - 兜底：非 200 响应若为纯文本模型 + `context_length_exceeded` 且请求含图片，走同一剥离重试分支。
+  - 范围严格限定 zhipu-v4 + glm-5.3，不影响支持图片的模型与 function call；无图片时零改动。已加回归测试（`responses_handler_test.go`）。
+- 智谱上游复现方式：`POST https://open.bigmodel.cn/api/v1/responses`，超大 input 时非流式返回 400 `{"error":{"code":"context_length_exceeded","message":"Prompt exceeds max length"}}`；流式返回 200 + `event: response.failed`。
+- 注意：客户端侧模型目录仍缺 glm-5.3（默认 context_window=258400），已在 401 记忆中的 `config.toml` 之外记录；如需彻底对齐，可在 Windows 客户端 `model-catalogs` 或配置 `model_context_window`/`model_auto_compact_token_limit` 补条目（当前修复不依赖此项）。
+
 ## Internationalization (i18n)
 
 ### Backend (`i18n/`)
@@ -152,3 +178,17 @@ For request structs that are parsed from client JSON and then re-marshaled to up
 ### Rule 7: Billing Expression System — Read `pkg/billingexpr/expr.md`
 
 When working on tiered/dynamic billing (expression-based pricing), you MUST read `pkg/billingexpr/expr.md` first. It documents the design philosophy, expression language (variables, functions, examples), full system architecture (editor → storage → pre-consume → settlement → log display), token normalization rules (`p`/`c` auto-exclusion), quota conversion, and expression versioning. All code changes to the billing expression system must follow the patterns described in that document.
+### 排查结论：新版 Codex（26.825.x）工具 schema 被上游严格校验拒绝（Kimi/Claude/gpt-5.4，已定位并修复） 被上游严格校验拒绝（Kimi/Claude/gpt-5.4，已定位并修复）
+
+- 现象：Windows Codex `26.825.51511`（主机 `183.12.193.133`，`Administrator` / `2021facebb`）用 chat/completions 协议，Kimi（moonshot）、claude-sonnet-5/opus-5、gpt-5.4 报工具 schema 非法；deepseek-v4-flash、glm-5.3 正常；老版本 `26.725.*`/`26.730.*` 无此问题。oc 日志三条错误原文：
+  - channel 4 (gpt-5.4)：`Invalid schema for function 'mcp__codex_app__automation_update': schema must have type 'object' and not have 'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the top level`（`tools[14].function.parameters`）
+  - channel 5 (kimi-k2.7-code)：`not a valid moonshot flavored json schema, details: <At path '$defs.__schema20': when using $ref, type should be defined in the referenced schema instead of the parent schema>`
+  - channel 9 (claude)：`input_schema does not support oneOf, allOf, or anyOf at the top level`
+- 根因：新版 Codex 应用内置 MCP 工具 `mcp__codex_app__automation_update` 的 parameters 由 schema 生成器产出 `{$defs, 顶层 oneOf(4 个动作变体), properties:{}, required:[], type:"object"}`；`$defs` 里还有 `{"$ref": ..., "type": "string"}` 的非法并存写法。OpenAI/Anthropic 拒绝顶层组合关键字、Moonshot 拒绝 `$ref` 带兄弟 `type`。new-api 是原样透传，不加工工具参数。
+- 修复（`relaykit/relayconvert/schema_normalize.go` + `relay/tool_schema.go`，分支 `sync/frontend-20260805` 未提交）：
+  - `IsComplexToolParameters` / `NormalizeToolParameters`：仅对含 `$defs` 或顶层 `oneOf/anyOf/allOf` 的工具 parameters 生效——完全内联 `$defs/$ref`（循环引用安全），顶层 union 合并为单个 object schema（properties 取并集、枚举合并、required 取交集、去掉 `additionalProperties:false`），嵌套 anyOf（如 nullable）保留；普通 schema 原样返回，零改动。
+  - chat/completions 入口 `relay/compatible_handler.go` `TextHelper`、responses 入口 `relay/responses_handler.go` `ResponsesHelper` 各调用一次（responses 版对 `Tools json.RawMessage` 做解析→重写→仅在有改动时重序列化）。
+  - 范围严格限定：只重写含生成结构的工具，不影响 deepseek/glm 等其它模型、不触碰 function call 语义与调用名、不影响图片工具（view_image 等）。
+  - 回归测试：`relaykit/relayconvert/schema_normalize_test.go`（用真实 `automation_update` schema 断言：无 `$defs/$ref/顶层组合关键字`、mode 枚举 6 值、required=[mode]、普通 schema 引用不变、`$ref`+sibling type、循环引用不卡死）、`relay/responses_handler_test.go`（RawMessage 重写与无改动原样返回）。
+  - 真实失败请求证据：oc 日志 request id `202608300840194803514868268d9d68YNtAi6G`（16:40:20）；schema 备份 `relaykit/relayconvert/testdata/automation_update_parameters.json`，完整请求体曾备份于 oc `/tmp/req_auto.txt`、`/tmp/fail_body*.txt`。
+  - 验证方式：本地 3010 服务用 `26.825.51511` 客户端复测 kimi/claude/gpt-5.4（chat 与 responses 均覆盖）→ 通过后 `./update_new_api_oc.sh`、`./update_new_api_zh.sh`。排查用的 oc `DEBUG=true` 记得还原。

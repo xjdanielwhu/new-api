@@ -4,6 +4,9 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	appconstant "github.com/QuantumNous/new-api/constant"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFlattenResponsesContentArraysForRetry_NoChange(t *testing.T) {
@@ -415,4 +418,123 @@ func TestStripResponsesPreviousResponseIDForRetry(t *testing.T) {
 	if _, changed := stripResponsesPreviousResponseIDForRetry(emptyPrev); changed {
 		t.Fatal("expected no change with empty previous_response_id")
 	}
+}
+
+func TestIsResponsesContextLengthExceededError(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want bool
+	}{
+		{"zhipu code", `{"error":{"code":"context_length_exceeded","message":"Prompt exceeds max length"}}`, true},
+		{"zhipu message only", "Prompt exceeds max length", true},
+		{"openai style", "This model's maximum context length is 128000 tokens", false},
+		{"image unsupported", "this model does not support images", false},
+		{"unrelated", "upstream timeout", false},
+		{"empty", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isResponsesContextLengthExceededError(tc.msg))
+		})
+	}
+}
+
+func TestIsTextOnlyResponsesModel(t *testing.T) {
+	base := func(channelType int, upstream, origin string) *relaycommon.RelayInfo {
+		return &relaycommon.RelayInfo{
+			ChannelMeta:     &relaycommon.ChannelMeta{ChannelType: channelType, UpstreamModelName: upstream},
+			OriginModelName: origin,
+		}
+	}
+	tests := []struct {
+		name string
+		info *relaycommon.RelayInfo
+		want bool
+	}{
+		{"zhipu-v4 glm-5.3", base(appconstant.ChannelTypeZhipu_v4, "glm-5.3", "glm-5.3"), true},
+		{"zhipu-v4 glm-5.3 suffix", base(appconstant.ChannelTypeZhipu_v4, "glm-5.3-20260827", "glm-5.3"), true},
+		{"zhipu-v4 upper case", base(appconstant.ChannelTypeZhipu_v4, "GLM-5.3", "glm-5.3"), true},
+		{"zhipu-v4 upstream empty falls back to origin", base(appconstant.ChannelTypeZhipu_v4, "", "glm-5.3"), true},
+		{"zhipu-v4 glm-5 (vision unknown)", base(appconstant.ChannelTypeZhipu_v4, "glm-5", "glm-5"), false},
+		{"zhipu-v4 glm-4.5", base(appconstant.ChannelTypeZhipu_v4, "glm-4.5", "glm-4.5"), false},
+		{"non-zhipu channel glm-5.3", base(appconstant.ChannelTypeOpenAI, "glm-5.3", "glm-5.3"), false},
+		{"nil info", nil, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isTextOnlyResponsesModel(tc.info))
+		})
+	}
+}
+
+func TestStripResponsesImagesForUnsupportedRetry_StripsInputImages(t *testing.T) {
+	raw := []byte(`{"model":"glm-5.3","input":[
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"分析这张图"},{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]},
+		{"type":"function_call_output","call_id":"call_1","output":[{"type":"input_image","image_url":"data:image/png;base64,BBBB"}]},
+		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"好的"}]}
+	]}`)
+	out, removed, changed := stripResponsesImagesForUnsupportedRetry(raw)
+	require.True(t, changed)
+	require.Equal(t, 2, removed)
+	var reqMap map[string]any
+	require.NoError(t, common.Unmarshal(out, &reqMap))
+	input := reqMap["input"].([]any)
+	require.Len(t, input, 3)
+
+	msg := input[0].(map[string]any)
+	content := msg["content"].([]any)
+	require.Len(t, content, 2)
+	part, ok := content[1].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "input_text", part["type"])
+	require.Equal(t, responsesImageRemovedPlaceholder, part["text"])
+
+	fco := input[1].(map[string]any)
+	fcoOut := fco["output"].([]any)
+	require.Len(t, fcoOut, 1)
+	fcoPart, ok := fcoOut[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "input_text", fcoPart["type"])
+	require.Equal(t, responsesImageRemovedPlaceholder, fcoPart["text"])
+
+	// 纯文本请求不应有任何改动
+	plain := []byte(`{"model":"glm-5.3","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
+	_, removed, changed = stripResponsesImagesForUnsupportedRetry(plain)
+	require.False(t, changed)
+	require.Equal(t, 0, removed)
+}
+
+func TestNormalizeResponsesToolSchemas_RewritesGeneratedSchema(t *testing.T) {
+	params := `{
+		"$defs": {"s": {"type": "string"}},
+		"oneOf": [
+			{"type": "object", "properties": {"mode": {"enum": ["view"], "type": "string"}}, "required": ["mode"], "additionalProperties": false},
+			{"type": "object", "properties": {"mode": {"enum": ["create"], "type": "string"}}, "required": ["mode"], "additionalProperties": false}
+		],
+		"properties": {},
+		"required": [],
+		"type": "object"
+	}`
+	raw := []byte(`[{"type":"function","function":{"name":"automation_update","parameters":` + params + `}},{"type":"function","function":{"name":"exec_command","parameters":{"type":"object","properties":{"cmd":{"type":"string"}}}}}]`)
+	out, n := normalizeResponsesToolSchemas(raw)
+	require.Equal(t, 1, n, "only the generated schema is rewritten")
+	var tools []map[string]any
+	require.NoError(t, common.Unmarshal(out, &tools))
+	require.Len(t, tools, 2)
+	norm, _ := tools[0]["function"].(map[string]any)["parameters"].(map[string]any)
+	require.NotNil(t, norm)
+	require.NotContains(t, norm, "$defs")
+	require.NotContains(t, norm, "oneOf")
+	require.Equal(t, "object", norm["type"])
+	require.Equal(t, "create", norm["properties"].(map[string]any)["mode"].(map[string]any)["enum"].([]any)[1])
+	plain, _ := tools[1]["function"].(map[string]any)["parameters"].(map[string]any)
+	require.Equal(t, map[string]any{"type": "string"}, plain["properties"].(map[string]any)["cmd"])
+}
+
+func TestNormalizeResponsesToolSchemas_PlainSchemasUntouched(t *testing.T) {
+	raw := []byte(`[{"type":"function","function":{"name":"exec_command","parameters":{"type":"object","properties":{"cmd":{"type":"string"}}}}}]`)
+	out, n := normalizeResponsesToolSchemas(raw)
+	require.Equal(t, 0, n)
+	require.Equal(t, string(raw), string(out), "original bytes must be returned when nothing changed")
 }

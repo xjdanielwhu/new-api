@@ -44,6 +44,13 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
+	// 新版 Codex 客户端（26.825+）自动生成的工具 schema 使用 $defs/$ref 与顶层
+	// oneOf，OpenAI/Anthropic/Moonshot 等上游严格校验会拒绝；统一规范化为纯内联
+	// schema，只影响含此类生成结构的工具，普通工具 schema 原样透传。
+	if normalizedTools := normalizeChatToolSchemas(request); normalizedTools > 0 {
+		logger.LogDebug(c, "normalized %d generated tool schema(s) for upstream validation", normalizedTools)
+	}
+
 	includeUsage := true
 	// 判断用户是否需要返回使用情况
 	if request.StreamOptions != nil {

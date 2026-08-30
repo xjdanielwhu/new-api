@@ -108,6 +108,35 @@ func isResponsesImageUnsupportedError(msg string) bool {
 	return false
 }
 
+// isResponsesContextLengthExceededError 匹配上游返回的上下文超长错误。
+// 智谱 GLM-5.3 的 responses 端点对超长输入返回
+// code=context_length_exceeded / "Prompt exceeds max length"，
+// 该错误码会让 Codex 客户端把会话永久标记为上下文已满（不可恢复）。
+func isResponsesContextLengthExceededError(msg string) bool {
+	msg = strings.ToLower(msg)
+	return strings.Contains(msg, "context_length_exceeded") ||
+		strings.Contains(msg, "prompt exceeds max length")
+}
+
+// isTextOnlyResponsesModel 判断模型是否为已知纯文本模型（不支持图片等视觉输入）。
+// 智谱 GLM-5.3 官方仅支持文本模态：客户端把 view_image 等工具输出的 base64 图片
+// 写进 responses 请求 input 后，上游不会明确报"不支持图片"，而是因 base64 图片使
+// 请求体膨胀超过上限，以 context_length_exceeded（"Prompt exceeds max length"）
+// 拒绝；客户端收到该错误码会把整个会话永久标记为上下文已满，导致不可恢复。
+// 因此对这类纯文本模型需要在发送上游前主动剥离图片内容；判定保持窄范围，
+// 不影响支持图片的模型，也不触碰 function call 逻辑。
+func isTextOnlyResponsesModel(info *relaycommon.RelayInfo) bool {
+	if info == nil || info.ChannelType != appconstant.ChannelTypeZhipu_v4 {
+		return false
+	}
+	model := info.UpstreamModelName
+	if model == "" {
+		model = info.OriginModelName
+	}
+	model = strings.ToLower(strings.TrimSpace(model))
+	return model == "glm-5.3" || strings.HasPrefix(model, "glm-5.3-")
+}
+
 func flattenResponsesContentArraysForRetry(body []byte) ([]byte, bool) {
 	return rewriteResponsesInputForRetry(body, false, false)
 }
@@ -652,6 +681,13 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
+	// 与 chat/completions 入口一致的生成工具 schema 规范化（$defs/$ref、顶层
+	// oneOf -> 纯内联 object schema），仅重写含此类结构的工具。
+	if rawTools, normalizedTools := normalizeResponsesToolSchemas(request.Tools); normalizedTools > 0 {
+		request.Tools = rawTools
+		logger.LogDebug(c, "normalized %d generated tool schema(s) for upstream validation", normalizedTools)
+	}
+
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
@@ -682,6 +718,17 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
 			if err != nil {
 				return newAPIErrorFromParamOverride(err)
+			}
+		}
+		// 纯文本模型（智谱 glm-5.3）的 responses 请求在发送上游前主动剥离图片内容：
+		// base64 图片会使请求体膨胀到超过上游上限，上游以 context_length_exceeded
+		// 拒绝，客户端收到该错误码会把会话永久标记为上下文已满（不可恢复），
+		// 详见 isTextOnlyResponsesModel。
+		if isTextOnlyResponsesModel(info) {
+			if stripped, removed, changed := stripResponsesImagesForUnsupportedRetry(jsonData); changed {
+				c.Header("X-Images-Removed", strconv.Itoa(removed))
+				logger.LogWarn(c, fmt.Sprintf("responses handler auto-recovery: proactively removed %d image(s) for text-only model %s before upstream request", removed, info.UpstreamModelName))
+				jsonData = stripped
 			}
 		}
 		logger.LogDebug(c, "requestBody: %s", jsonData)
@@ -818,7 +865,8 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 							newAPIError = retryErr
 						}
 					}
-					if isResponsesImageUnsupportedError(newAPIError.Error()) {
+					if isResponsesImageUnsupportedError(newAPIError.Error()) ||
+						(isTextOnlyResponsesModel(info) && isResponsesContextLengthExceededError(newAPIError.Error())) {
 						if newBody, removed, changed := stripResponsesImagesForUnsupportedRetry(rawBody); changed {
 							c.Header("X-Images-Removed", strconv.Itoa(removed))
 							retryResp, retryErr := retryResponsesRequest(c, info, adaptor, newBody, fmt.Sprintf("responses handler auto-recovery: removed %d unsupported images and retrying upstream once", removed))
