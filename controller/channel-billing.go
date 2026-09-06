@@ -300,8 +300,23 @@ func updateChannelDeepSeekBalance(channel *model.Channel) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	channel.UpdateBalance(balance)
-	return balance, nil
+	// DeepSeek 余额接口按 CNY 返回，渠道 balance 统一以 USD 记录，
+	// 需按站点配置的美元汇率换算后再写入。
+	balanceUsd, err := cnyBalanceToUsd(balance)
+	if err != nil {
+		return 0, err
+	}
+	channel.UpdateBalance(balanceUsd)
+	return balanceUsd, nil
+}
+
+// cnyBalanceToUsd 将上游以人民币结算的余额按站点配置的美元汇率换算为 USD。
+func cnyBalanceToUsd(cny float64) (float64, error) {
+	rate := operation_setting.USDExchangeRate
+	if rate <= 0 {
+		return 0, fmt.Errorf("invalid USD exchange rate: %v", rate)
+	}
+	return decimal.NewFromFloat(cny).Div(decimal.NewFromFloat(rate)).InexactFloat64(), nil
 }
 
 func updateChannelAIGC2DBalance(channel *model.Channel) (float64, error) {
