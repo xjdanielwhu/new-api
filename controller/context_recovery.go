@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -607,6 +608,24 @@ func tryToolPairingRecovery(c *gin.Context, info *relaycommon.RelayInfo, apiErr 
 const payloadRecoveredKey = "payload_too_large_recovered"
 
 const payloadCompressRecoveredKey = "payload_too_large_compress_recovered"
+
+// supportsPayloadImageRecovery 判断当前 relay 格式/模式是否支持
+// "剥离/压缩请求内图片 -> 原地重试" 的 413 恢复。
+// chat/completions 与 responses 系列虽然 relayFormat 不同，但请求体中都可能携带
+// base64 图片 part（messages / input），因此都必须覆盖；其余格式（claude/gemini/
+// audio 等）请求体结构不同，不参与该恢复。
+func supportsPayloadImageRecovery(relayFormat types.RelayFormat, relayMode int) bool {
+	switch relayFormat {
+	case types.RelayFormatOpenAI:
+		return relayMode == relayconstant.RelayModeChatCompletions
+	case types.RelayFormatOpenAIResponses:
+		return relayMode == relayconstant.RelayModeResponses
+	case types.RelayFormatOpenAIResponsesCompaction:
+		return relayMode == relayconstant.RelayModeResponsesCompact
+	default:
+		return false
+	}
+}
 
 // tryPayloadTooLargeRecovery 检测上游 413 Payload Too Large 错误（请求体字节数超限，
 // 常见于会话累积大量 base64 图片），剥离历史图片后用同一渠道原地重试一次。

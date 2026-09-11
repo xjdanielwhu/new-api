@@ -3,14 +3,24 @@ package controller
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
 	"math/rand"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStripOldImagePartsChatMessages(t *testing.T) {
@@ -469,4 +479,101 @@ func TestReasoningEffortDowngradeMutatesBody(t *testing.T) {
 	if _, hasTools := reqMap["tools"]; !hasTools {
 		t.Fatal("expected tools preserved after downgrade")
 	}
+}
+
+// 413 恢复必须覆盖 responses 系列：/v1/responses 使用 RelayFormatOpenAIResponses，
+// 若只判定 relayFormat == RelayFormatOpenAI，Codex 的 responses 会话在累积大量
+// base64 图片被上游 413 拒绝后将永远无法恢复（每次重试都重发同一个超大请求体）。
+func TestSupportsPayloadImageRecovery(t *testing.T) {
+	cases := []struct {
+		name        string
+		relayFormat types.RelayFormat
+		relayMode   int
+		want        bool
+	}{
+		{"chat completions", types.RelayFormatOpenAI, relayconstant.RelayModeChatCompletions, true},
+		{"responses", types.RelayFormatOpenAIResponses, relayconstant.RelayModeResponses, true},
+		{"responses compact", types.RelayFormatOpenAIResponsesCompaction, relayconstant.RelayModeResponsesCompact, true},
+		{"openai completions", types.RelayFormatOpenAI, relayconstant.RelayModeCompletions, false},
+		{"openai embeddings", types.RelayFormatOpenAI, relayconstant.RelayModeEmbeddings, false},
+		{"claude", types.RelayFormatClaude, relayconstant.RelayModeChatCompletions, false},
+		{"gemini", types.RelayFormatGemini, relayconstant.RelayModeChatCompletions, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, supportsPayloadImageRecovery(tc.relayFormat, tc.relayMode))
+		})
+	}
+}
+
+// 自动恢复开关默认由环境变量控制（生产默认 true），单测需显式初始化。
+func enableAutoRecoveryForTest(t *testing.T) {
+	t.Helper()
+	prev := constant.ContextOverflowAutoRecovery
+	constant.ContextOverflowAutoRecovery = true
+	t.Cleanup(func() { constant.ContextOverflowAutoRecovery = prev })
+}
+
+func newResponsesRecoveryContext(t *testing.T, raw []byte) *gin.Context {
+	t.Helper()
+	enableAutoRecoveryForTest(t)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(raw))
+	storage, err := common.CreateBodyStorage(raw)
+	require.NoError(t, err)
+	c.Set(common.KeyBodyStorage, storage)
+	return c
+}
+
+func payloadTooLargeError() *types.NewAPIError {
+	return types.NewErrorWithStatusCode(errors.New("bad response status code 413"), types.ErrorCodeBadResponseStatusCode, http.StatusRequestEntityTooLarge)
+}
+
+// 模拟真实 Codex responses 请求：多张 function_call_output 中的 base64 图片
+// （type=input_image，位于 output 数组内）使请求体超过上游上限返回 413。
+// 恢复后旧的图片必须被剥离、最新一张保留，且 info.Request 同步更新。
+func TestTryPayloadTooLargeRecoveryForResponsesInput(t *testing.T) {
+	oldImage := "data:image/png;base64," + strings.Repeat("A", 400000)
+	newImage := "data:image/png;base64," + strings.Repeat("B", 400000)
+	raw := []byte(`{"model":"deepseek-v4-flash-vision-exp","input":[` +
+		`{"type":"message","role":"user","content":[{"type":"input_image","image_url":"` + oldImage + `"},{"type":"input_text","text":"old"}]},` +
+		`{"type":"function_call_output","call_id":"call_1","output":[{"type":"input_image","image_url":"` + oldImage + `","detail":"high"}]},` +
+		`{"type":"function_call_output","call_id":"call_2","output":[{"type":"input_image","image_url":"` + newImage + `","detail":"high"}]}` +
+		`]}`)
+
+	c := newResponsesRecoveryContext(t, raw)
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeResponses,
+		Request:   &dto.OpenAIResponsesRequest{},
+	}
+
+	require.True(t, tryPayloadTooLargeRecovery(c, info, payloadTooLargeError()))
+
+	newStorage, err := common.GetBodyStorage(c)
+	require.NoError(t, err)
+	newBody, err := newStorage.Bytes()
+	require.NoError(t, err)
+	require.Less(t, len(newBody), len(raw))
+	require.Contains(t, string(newBody), omittedImagePlaceholder)
+	require.NotContains(t, string(newBody), oldImage)
+	require.Contains(t, string(newBody), newImage, "最新一张图片必须保留")
+
+	updated, err := common.Marshal(info.Request)
+	require.NoError(t, err)
+	require.Contains(t, string(updated), omittedImagePlaceholder)
+	require.NotContains(t, string(updated), oldImage)
+}
+
+func TestTryPayloadTooLargeRecoverySkipsNon413AndTextOnlyResponses(t *testing.T) {
+	raw := []byte(`{"model":"deepseek-v4-flash-vision-exp","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]}`)
+
+	c := newResponsesRecoveryContext(t, raw)
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeResponses,
+		Request:   &dto.OpenAIResponsesRequest{},
+	}
+	notFound := types.NewErrorWithStatusCode(errors.New("bad response status code 404"), types.ErrorCodeBadResponseStatusCode, http.StatusNotFound)
+	require.False(t, tryPayloadTooLargeRecovery(c, info, notFound), "非 413 不应触发恢复")
+
+	require.False(t, tryPayloadTooLargeRecovery(c, info, payloadTooLargeError()), "无可剥离图片时不应触发恢复")
 }

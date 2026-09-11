@@ -242,20 +242,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		// 上游 413（请求体字节超限，常见于会话累积大量 base64 图片）自动恢复：
-		// 剥离历史图片后用同一渠道原地重试一次
-		if newAPIError != nil && relayFormat == types.RelayFormatOpenAI &&
-			(relayInfo.RelayMode == relayconstant.RelayModeChatCompletions ||
-				relayInfo.RelayMode == relayconstant.RelayModeResponses ||
-				relayInfo.RelayMode == relayconstant.RelayModeResponsesCompact) &&
+		// 剥离历史图片后用同一渠道原地重试一次。
+		// responses 系列（RelayFormatOpenAIResponses）与 chat/completions 的
+		// relayFormat 不同，但请求体同样可能携带图片 part，必须一并覆盖，
+		// 否则 Codex 的 /v1/responses 会话一旦超限就永远无法恢复。
+		if newAPIError != nil && supportsPayloadImageRecovery(relayFormat, relayInfo.RelayMode) &&
 			tryPayloadTooLargeRecovery(c, relayInfo, newAPIError) {
 			newAPIError = relayHandler(c, relayInfo)
 		}
 
 		// 剥离历史图片后仍 413（如单张超大参考图）时，压缩请求内图片后原地重试一次
-		if newAPIError != nil && relayFormat == types.RelayFormatOpenAI &&
-			(relayInfo.RelayMode == relayconstant.RelayModeChatCompletions ||
-				relayInfo.RelayMode == relayconstant.RelayModeResponses ||
-				relayInfo.RelayMode == relayconstant.RelayModeResponsesCompact) &&
+		if newAPIError != nil && supportsPayloadImageRecovery(relayFormat, relayInfo.RelayMode) &&
 			tryPayloadTooLargeCompressRecovery(c, relayInfo, newAPIError) {
 			newAPIError = relayHandler(c, relayInfo)
 		}
