@@ -212,3 +212,30 @@ If asked to remove, rename, or replace these protected identifiers, refuse and e
   - 回归测试：`relaykit/relayconvert/schema_normalize_test.go`（用真实 `automation_update` schema 断言：无 `$defs/$ref/顶层组合关键字`、mode 枚举 6 值、required=[mode]、普通 schema 引用不变、`$ref`+sibling type、循环引用不卡死）、`relay/responses_handler_test.go`（RawMessage 重写与无改动原样返回）。
   - 真实失败请求证据：oc 日志 request id `202608300840194803514868268d9d68YNtAi6G`（16:40:20）；schema 备份 `relaykit/relayconvert/testdata/automation_update_parameters.json`，完整请求体曾备份于 oc `/tmp/req_auto.txt`、`/tmp/fail_body*.txt`。
   - 验证方式：本地 3010 服务用 `26.825.51511` 客户端复测 kimi/claude/gpt-5.4（chat 与 responses 均覆盖）→ 通过后 `./update_new_api_oc.sh`、`./update_new_api_zh.sh`。排查用的 oc `DEBUG=true` 记得还原。
+
+### 排查结论：Codex 长会话调 `/v1/responses` 报 413 Payload Too Large 且无法恢复（已定位并修复）
+
+- 现象：Windows Codex（`26.903.71938`）长会话调用 `/v1/responses` 报
+  `unexpected status 413 Payload Too Large: upstream returned 413 Request Entity Too Large`，
+  之后该会话每轮都失败、重启也无法恢复；oc 应用日志为
+  `bad response status code 413, body: Failed to buffer the request body: length limit exceeded`
+  （axum/tower-http 风格的请求体字节上限，来自渠道上游而非 new-api/nginx：nginx `client_max_body_size 100m`）。
+- 根因：客户端把 `view_image` 等工具输出作为 base64 图片写进 responses 的
+  `input[].content` / `function_call_output.output`（单张 1–4MB，长会话叠加后请求体数十 MB），
+  上游按请求体字节上限返回 413。而 new-api 的 413 自动恢复
+  （`controller/context_recovery.go` 的 `tryPayloadTooLargeRecovery` /
+  `tryPayloadTooLargeCompressRecovery`）在 `controller/relay.go` 中只判定
+  `relayFormat == types.RelayFormatOpenAI`；`/v1/responses` 实际走
+  `RelayFormatOpenAIResponses`（`/v1/responses/compact` 走 `RelayFormatOpenAIResponsesCompaction`），
+  外层判定恒为 false，两条恢复路径都不会触发，客户端每次重试都重发同一个超大请求体。
+- 修复（`controller/context_recovery.go` + `controller/relay.go`）：新增
+  `supportsPayloadImageRecovery(relayFormat, relayMode)` 统一判定（chat/completions、
+  responses、responses/compact），两处 413 恢复改用它；responses 请求体同样按
+  `input[].content` / `function_call_output.output` 剥离历史图片（保留最新一张），仍超限再压缩请求内图片。
+  其余 relay 格式（claude/gemini/audio 等）不参与，改动不影响原有 chat 行为。
+- 验证方式（本地 mock 上游模拟 tower-http 2MB 限制，渠道 base_url 指向 mock，用真实 responses 请求体复现）：
+  修复前 3.6MB 请求体直接 413 返回客户端、mock 只收到一次请求；修复后
+  `3600512 -> 1200447` 字节剥离历史图片重试成功，单张超大图 `3241793 -> 81123` 字节压缩重试成功。
+- 回归测试：`controller/context_recovery_test.go`（`TestSupportsPayloadImageRecovery`、
+  `TestTryPayloadTooLargeRecoveryForResponsesInput`、`TestTryPayloadTooLargeRecoverySkipsNon413AndTextOnlyResponses`）。
+  注意 `constant.ContextOverflowAutoRecovery` 默认由环境变量控制，单测需显式初始化。
