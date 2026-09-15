@@ -43,6 +43,9 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
+	if err := helper.ApplyReasoningModelSuffix(c, info, request); err != nil {
+		return newConvertRequestFailedError(c, info, err)
+	}
 
 	// 新版 Codex 客户端（26.825+）自动生成的工具 schema 使用 $defs/$ref 与顶层
 	// oneOf，OpenAI/Anthropic/Moonshot 等上游严格校验会拒绝；统一规范化为纯内联
@@ -83,7 +86,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		!info.ChannelSetting.PassThroughBodyEnabled &&
 		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
 		applySystemPromptIfNeeded(c, info, request)
-		usage, newApiErr := chatCompletionsViaResponses(c, info, adaptor, request)
+		usage, newApiErr := textRequestViaResponses(c, info, adaptor, request)
 		if newApiErr != nil {
 			return newApiErr
 		}
@@ -115,50 +118,12 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	} else {
 		convertedRequest, err := adaptor.ConvertOpenAIRequest(c, info, request)
 		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			return newConvertRequestFailedError(c, info, err)
 		}
 		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
 
-		if info.ChannelSetting.SystemPrompt != "" {
-			// 如果有系统提示，则将其添加到请求中
-			request, ok := convertedRequest.(*dto.GeneralOpenAIRequest)
-			if ok {
-				containSystemPrompt := false
-				for _, message := range request.Messages {
-					if message.Role == request.GetSystemRoleName() {
-						containSystemPrompt = true
-						break
-					}
-				}
-				if !containSystemPrompt {
-					// 如果没有系统提示，则添加系统提示
-					systemMessage := dto.Message{
-						Role:    request.GetSystemRoleName(),
-						Content: info.ChannelSetting.SystemPrompt,
-					}
-					request.Messages = append([]dto.Message{systemMessage}, request.Messages...)
-				} else if info.ChannelSetting.SystemPromptOverride {
-					common.SetContextKey(c, constant.ContextKeySystemPromptOverride, true)
-					// 如果有系统提示，且允许覆盖，则拼接到前面
-					for i, message := range request.Messages {
-						if message.Role == request.GetSystemRoleName() {
-							if message.IsStringContent() {
-								request.Messages[i].SetStringContent(info.ChannelSetting.SystemPrompt + "\n" + message.StringContent())
-							} else {
-								contents := message.ParseContent()
-								contents = append([]dto.MediaContent{
-									{
-										Type: dto.ContentTypeText,
-										Text: info.ChannelSetting.SystemPrompt,
-									},
-								}, contents...)
-								request.Messages[i].Content = contents
-							}
-							break
-						}
-					}
-				}
-			}
+		if req, ok := convertedRequest.(*dto.GeneralOpenAIRequest); ok {
+			applySystemPromptIfNeeded(c, info, req)
 		}
 
 		jsonData, err := common.Marshal(convertedRequest)

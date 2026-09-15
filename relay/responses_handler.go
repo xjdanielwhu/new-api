@@ -19,7 +19,6 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -635,17 +634,6 @@ func tryResponsesReasoningDowngrade(c *gin.Context, info *relaycommon.RelayInfo,
 }
 
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
-	info.InitChannelMeta(c)
-	if info.RelayMode == relayconstant.RelayModeResponsesCompact &&
-		!common.SupportsResponsesCompact(info.ChannelType, info.ApiType) {
-		return types.NewErrorWithStatusCode(
-			fmt.Errorf("unsupported endpoint %q for api type %d", "/v1/responses/compact", info.ApiType),
-			types.ErrorCodeInvalidRequest,
-			http.StatusBadRequest,
-			types.ErrOptionWithSkipRetry(),
-		)
-	}
-
 	var responsesReq *dto.OpenAIResponsesRequest
 	switch req := info.Request.(type) {
 	case *dto.OpenAIResponsesRequest:
@@ -671,75 +659,11 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		)
 	}
 
-	request, err := common.DeepCopy(responsesReq)
-	if err != nil {
-		return types.NewError(fmt.Errorf("failed to copy request to GeneralOpenAIRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	adaptor, requestBody, closer, apiErr := PrepareResponsesRequest(c, info, responsesReq)
+	if apiErr != nil {
+		return apiErr
 	}
-
-	err = helper.ModelMappedHelper(c, info, request)
-	if err != nil {
-		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
-	}
-
-	// 与 chat/completions 入口一致的生成工具 schema 规范化（$defs/$ref、顶层
-	// oneOf -> 纯内联 object schema），仅重写含此类结构的工具。
-	if rawTools, normalizedTools := normalizeResponsesToolSchemas(request.Tools); normalizedTools > 0 {
-		request.Tools = rawTools
-		logger.LogDebug(c, "normalized %d generated tool schema(s) for upstream validation", normalizedTools)
-	}
-
-	adaptor := GetAdaptor(info.ApiType)
-	if adaptor == nil {
-		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
-	}
-	adaptor.Init(info)
-	var requestBody io.Reader
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
-		storage, err := common.GetBodyStorage(c)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
-		}
-		requestBody = common.NewReplayableBodyReader(storage)
-	} else {
-		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
-		jsonData, err := common.Marshal(convertedRequest)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		if len(info.ParamOverride) > 0 {
-			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
-			if err != nil {
-				return newAPIErrorFromParamOverride(err)
-			}
-		}
-		// 纯文本模型（智谱 glm-5.3）的 responses 请求在发送上游前主动剥离图片内容：
-		// base64 图片会使请求体膨胀到超过上游上限，上游以 context_length_exceeded
-		// 拒绝，客户端收到该错误码会把会话永久标记为上下文已满（不可恢复），
-		// 详见 isTextOnlyResponsesModel。
-		if isTextOnlyResponsesModel(info) {
-			if stripped, removed, changed := stripResponsesImagesForUnsupportedRetry(jsonData); changed {
-				c.Header("X-Images-Removed", strconv.Itoa(removed))
-				logger.LogWarn(c, fmt.Sprintf("responses handler auto-recovery: proactively removed %d image(s) for text-only model %s before upstream request", removed, info.UpstreamModelName))
-				jsonData = stripped
-			}
-		}
-		logger.LogDebug(c, "requestBody: %s", jsonData)
-		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		defer closer.Close()
-		jsonData = nil
-		requestBody = body
-	}
+	defer closer.Close()
 
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
@@ -938,10 +862,16 @@ RESPONSE_OK:
 		return nil
 	}
 
-	if strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") {
-		service.PostAudioConsumeQuota(c, info, usageDto, "")
-	} else {
-		service.PostTextConsumeQuota(c, info, usageDto, nil)
-	}
+	ConsumeResponsesQuota(c, info, usageDto)
 	return nil
+}
+
+// ConsumeResponsesQuota applies the same settlement dispatch to HTTP and
+// WebSocket Responses usage. Compact requests keep their separate repricing.
+func ConsumeResponsesQuota(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage) {
+	if strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") {
+		service.PostAudioConsumeQuota(c, info, usage, "")
+		return
+	}
+	service.PostTextConsumeQuota(c, info, usage, nil)
 }
