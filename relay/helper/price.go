@@ -47,6 +47,19 @@ const claudeCacheCreation1hMultiplier = 6 / 3.75
 // long answer drain a wallet that was only checked against its input.
 const defaultPreConsumeMaxTokens = 8192
 
+// preConsumeBudget 返回本次请求可用于预扣的额度上限：用户余额，令牌限额生效时
+// 取二者较小值。返回 0 表示无法判断，调用方不做钳制。
+func preConsumeBudget(c *gin.Context, info *relaycommon.RelayInfo) int {
+	budget := info.UserQuota
+	if info.TokenUnlimited {
+		return budget
+	}
+	if tokenQuota := c.GetInt("token_quota"); tokenQuota > 0 && (budget <= 0 || tokenQuota < budget) {
+		budget = tokenQuota
+	}
+	return budget
+}
+
 // generatesCompletionTokens reports whether the request format bills
 // completion tokens. Images, embeddings, audio and rerank responses are priced
 // without one, so they must not reserve the fallback completion estimate.
@@ -122,7 +135,8 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		if estimatedCompletionTokens <= 0 && groupRatioInfo.GroupRatio != 0 && generatesCompletionTokens(info.Request) {
 			estimatedCompletionTokens = defaultPreConsumeMaxTokens
 		}
-		preConsumedTokens := common.Max(promptTokens, common.PreConsumedQuota) + estimatedCompletionTokens
+		inputTokens := common.Max(promptTokens, common.PreConsumedQuota)
+		preConsumedTokens := inputTokens + estimatedCompletionTokens
 		var success bool
 		var matchName string
 		modelRatio, success, matchName = ratio_setting.GetModelRatio(billingModelName)
@@ -148,6 +162,15 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		quota, err := common.QuotaFromFloatStrict(float64(preConsumedTokens) * ratio)
 		if err != nil {
 			return hosttypes.PriceData{}, err
+		}
+		inputQuota, err := common.QuotaFromFloatStrict(float64(inputTokens) * ratio)
+		if err != nil {
+			return hosttypes.PriceData{}, err
+		}
+		// 估算只用来把余额预留到位：可用额度覆盖不了全部估算时按可用额度预扣，
+		// 让只付得起输入成本的余额不会被估算本身拒之门外（差额由结算按余额钳制）。
+		if budget := preConsumeBudget(c, info); budget > 0 && quota > budget && inputQuota <= budget {
+			quota = budget
 		}
 		preConsumedQuota = quota
 		if _, image := info.Request.(*dto.ImageRequest); image {

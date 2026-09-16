@@ -717,11 +717,13 @@ func TestModelPriceHelperRatioPreConsumeCoversCompletionTokens(t *testing.T) {
 
 	const promptTokens = 1000
 	for _, tc := range []struct {
-		name      string
-		request   dto.Request
-		group     string
-		maxTokens int
-		want      int
+		name       string
+		request    dto.Request
+		group      string
+		maxTokens  int
+		userQuota  int
+		tokenQuota int
+		want       int
 	}{
 		{
 			// (1000 + 8192) * 2
@@ -765,15 +767,44 @@ func TestModelPriceHelperRatioPreConsumeCoversCompletionTokens(t *testing.T) {
 			group:   "default",
 			want:    2000,
 		},
+		{
+			// 余额低于估算时按余额预扣，不因估算本身拒绝
+			name:      "reservation is capped at the remaining balance",
+			request:   &dto.GeneralOpenAIRequest{},
+			group:     "default",
+			userQuota: 5000,
+			want:      5000,
+		},
+		{
+			// 连输入成本都付不起时保持原逻辑（由调用方判定额度不足）
+			name:      "input cost above the balance keeps the full estimate",
+			request:   &dto.GeneralOpenAIRequest{},
+			group:     "default",
+			userQuota: 1500,
+			want:      18384,
+		},
+		{
+			// 令牌限额生效时同样按限额钳制
+			name:       "reservation is capped at the token limit",
+			request:    &dto.GeneralOpenAIRequest{},
+			group:      "default",
+			userQuota:  100000,
+			tokenQuota: 3000,
+			want:       3000,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 			ctx.Set("group", tc.group)
+			if tc.tokenQuota > 0 {
+				ctx.Set("token_quota", tc.tokenQuota)
+			}
 			info := &relaycommon.RelayInfo{
 				OriginModelName: "ratio-fallback-model",
 				UserGroup:       tc.group,
 				UsingGroup:      tc.group,
 				Request:         tc.request,
+				UserQuota:       tc.userQuota,
 			}
 
 			priceData, err := ModelPriceHelper(ctx, info, promptTokens, &types.TokenCountMeta{MaxTokens: tc.maxTokens})
