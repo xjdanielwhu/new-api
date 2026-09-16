@@ -275,3 +275,18 @@ If asked to remove, rename, or replace these protected identifiers, refuse and e
 - 回归测试：`controller/context_recovery_test.go`（`TestSupportsPayloadImageRecovery`、
   `TestTryPayloadTooLargeRecoveryForResponsesInput`、`TestTryPayloadTooLargeRecoverySkipsNon413AndTextOnlyResponses`）。
   注意 `constant.ContextOverflowAutoRecovery` 默认由环境变量控制，单测需显式初始化。
+
+### 排查结论：文本请求余额透支（比例路径预扣只算输入 + 结算无条件扣，已修复）
+
+- 现象：用户余额被扣成负数（zh 历史遗留 244 个账号，合计 −$7.03；oc 同类账号合计 −$3.29）。
+- 根因（三处叠加）：
+  1. `relay/helper/price.go` 比例计费路径预扣 `max(prompt, PreConsumedQuota) + meta.MaxTokens`，客户端不传 `max_tokens` 时只按输入预扣，输出成本完全没估（tiered_expr 路径有 8192 兜底，比例路径没有）。
+  2. 结算 `WalletFunding.Settle` → `model.DecreaseUserQuota` 是 `WHERE id = ?` 无条件扣减，无 0 下限。
+  3. `shouldTrust` 对余额 > 10×QuotaPerUnit 的账号完全跳过预扣，并发在途请求叠加。
+- 修复（分支 `codex/upstream-merge-probe`，两个提交）：
+  - 预扣：`defaultTieredPreConsumeMaxTokens` 改名 `defaultPreConsumeMaxTokens` 并同时服务比例路径；仅对会产生补全 token 的文本请求（GeneralOpenAIRequest / OpenAIResponsesRequest / ClaudeRequest / GeminiChatRequest）生效，图片、嵌入、音频、rerank 不受影响。
+  - 钳制：`preConsumeBudget` 取「用户余额，令牌限额生效时取较小值」，估算超过可用额度时按可用额度预扣；连输入成本都付不起的请求保持原拒绝逻辑（不新增 403）。
+  - 结算：`WalletFunding.Settle` 改用 `model.TryReserveUserQuota` 原子条件扣减，余额不足时扣完剩余额度，差额记为冲销，余额不再为负；差额经 `relayInfo.WalletOverdraftQuota` 由 `attachWalletOverdraft` 写入消费日志 `other.admin_info.wallet_overdraft` 并输出 WARN 日志。
+- 关键权衡（zh 实测 24h）：补全兜底估算约为实际扣费的 23–40 倍（glm-5.3：实际均值 242 quota、估算 6145；deepseek-v4-flash：67 / 1933），近期活跃用户余额几乎都在估算值以下，因此必须按可用额度钳制，否则会大面积 403。
+- 验证：本地 3010 端到端——余额 2500 并发 3 请求只放行 1 个；余额 177 + `max_tokens=300` 触发超额结算时余额停在 0（不再 −33）且日志写入 `wallet_overdraft=33`；余额 800（估算 1931）按 800 预扣后放行。zh 上线后已出现 `admin_info.wallet_overdraft=116` 的真实冲销记录。
+- 尚未覆盖的扣费路径：`service/task_billing.go` 的 `taskAdjustFunding`、旧 `service/quota.go` `PostConsumeQuota` 回退路径、违规扣费，仍为无条件扣减，可继续产生负余额；令牌 `remain_quota` 同样没有 0 下限。
