@@ -171,6 +171,12 @@ type RelayInfo struct {
 	// It is surfaced onto the consume/task log's admin_info for auditing.
 	QuotaClamp *common.QuotaClamp
 
+	// WalletOverdraftQuota is the part of this request's final charge that could
+	// not be collected because the wallet balance ran out. Wallet settlement
+	// clamps the balance at zero instead of admitting debt, so the written-off
+	// amount is surfaced onto the consume log's admin_info for auditing.
+	WalletOverdraftQuota int
+
 	// TieredBillingSnapshot captures tiered billing rules at pre-consume time.
 	// Auto-group retries refresh its group-dependent fields before each attempt
 	// and again before settlement. Non-nil only when billing mode is "tiered_expr".

@@ -58,6 +58,10 @@ func (s *BillingSession) Settle(actualQuota int) error {
 		}
 		s.fundingSettled = true
 	}
+	// 钱包结算不会把余额扣成负数，收不回的差额记录到 relayInfo 供消费日志审计。
+	if wallet, ok := s.funding.(*WalletFunding); ok && wallet.overdraft > 0 && s.relayInfo != nil {
+		s.relayInfo.WalletOverdraftQuota += wallet.overdraft
+	}
 	// 2) 调整令牌额度
 	var tokenErr error
 	if !s.relayInfo.IsPlayground {

@@ -46,6 +46,20 @@ func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, o
 		clamp.Op, clamp.Kind, clamp.Original, clamp.Clamped, relayInfo.UserId, relayInfo.GetBillingModelName()))
 }
 
+// attachWalletOverdraft records the part of the final charge that had to be
+// written off because the wallet balance ran out. Wallet settlement clamps the
+// balance at zero instead of admitting debt, so the amount stays auditable in
+// admin_info and emits a request-correlated backend audit line. No-op when the
+// charge was fully collected (the common case).
+func attachWalletOverdraft(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
+	if relayInfo == nil || other == nil || relayInfo.WalletOverdraftQuota <= 0 {
+		return
+	}
+	other.SetAdmin("wallet_overdraft", relayInfo.WalletOverdraftQuota)
+	logger.LogWarn(ctx, fmt.Sprintf("wallet overdraft written off on consume log: quota=%d user=%d model=%s",
+		relayInfo.WalletOverdraftQuota, relayInfo.UserId, relayInfo.GetBillingModelName()))
+}
+
 func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
 	if other == nil {
 		return

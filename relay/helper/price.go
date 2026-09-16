@@ -40,10 +40,24 @@ func modelPriceNotConfiguredError(modelName string, userId int) error {
 // https://docs.claude.com/en/docs/build-with-claude/prompt-caching#1-hour-cache-duration
 const claudeCacheCreation1hMultiplier = 6 / 3.75
 
-// defaultTieredPreConsumeMaxTokens is the fallback completion-token estimate
-// used for tiered expression pre-consume when the client omits max_tokens, so
-// the pre-consumed quota still reflects a plausible output cost in paid groups.
-const defaultTieredPreConsumeMaxTokens = 8192
+// defaultPreConsumeMaxTokens is the fallback completion-token estimate used
+// when the client omits max_tokens, so the pre-consumed quota still reflects a
+// plausible output cost in paid groups. Shared by the ratio and the tiered
+// expression paths so both reserve output the same way instead of letting a
+// long answer drain a wallet that was only checked against its input.
+const defaultPreConsumeMaxTokens = 8192
+
+// generatesCompletionTokens reports whether the request format bills
+// completion tokens. Images, embeddings, audio and rerank responses are priced
+// without one, so they must not reserve the fallback completion estimate.
+func generatesCompletionTokens(request dto.Request) bool {
+	switch request.(type) {
+	case *dto.GeneralOpenAIRequest, *dto.OpenAIResponsesRequest, *dto.ClaudeRequest, *dto.GeminiChatRequest:
+		return true
+	default:
+		return false
+	}
+}
 
 // HandleGroupRatio checks for "auto_group" in the context and updates the group ratio and relayInfo.UsingGroup if present
 func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hosttypes.GroupRatioInfo {
@@ -102,10 +116,13 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	var audioCompletionRatio float64
 	var freeModel bool
 	if !usePrice {
-		preConsumedTokens := common.Max(promptTokens, common.PreConsumedQuota)
-		if meta.MaxTokens != 0 {
-			preConsumedTokens += meta.MaxTokens
+		// 客户端不传 max_tokens 时按兜底值估算补全开销：只按输入预扣会让
+		// 长输出请求在结算时把余额扣成负数。
+		estimatedCompletionTokens := meta.MaxTokens
+		if estimatedCompletionTokens <= 0 && groupRatioInfo.GroupRatio != 0 && generatesCompletionTokens(info.Request) {
+			estimatedCompletionTokens = defaultPreConsumeMaxTokens
 		}
+		preConsumedTokens := common.Max(promptTokens, common.PreConsumedQuota) + estimatedCompletionTokens
 		var success bool
 		var matchName string
 		modelRatio, success, matchName = ratio_setting.GetModelRatio(billingModelName)
@@ -368,7 +385,7 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 
 	estimatedCompletionTokens := meta.MaxTokens
 	if estimatedCompletionTokens == 0 && groupRatioInfo.GroupRatio != 0 {
-		estimatedCompletionTokens = defaultTieredPreConsumeMaxTokens
+		estimatedCompletionTokens = defaultPreConsumeMaxTokens
 	}
 
 	requestInput, err := ResolveIncomingBillingExprRequestInput(c, info)

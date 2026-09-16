@@ -35,6 +35,10 @@ var ErrInsufficientWalletQuota = errors.New("wallet quota insufficient")
 type WalletFunding struct {
 	userId   int
 	consumed int // 实际预扣的用户额度
+	// overdraft 是结算时因余额不足而收不回的差额。钱包结算不再无条件扣减，
+	// 余额不会被扣成负数（预付费模型：单用户损失上限即其余额），差额记录到
+	// 消费日志的 admin_info 供审计。
+	overdraft int
 }
 
 func (w *WalletFunding) Source() string { return BillingSourceWallet }
@@ -58,10 +62,40 @@ func (w *WalletFunding) Settle(delta int) error {
 	if delta == 0 {
 		return nil
 	}
-	if delta > 0 {
-		return model.DecreaseUserQuota(w.userId, delta, false)
+	if delta < 0 {
+		return model.IncreaseUserQuota(w.userId, -delta, false)
 	}
-	return model.IncreaseUserQuota(w.userId, -delta, false)
+	// 原子条件扣减：余额不足时不再无条件扣成负数。
+	reserved, err := model.TryReserveUserQuota(w.userId, delta)
+	if err != nil {
+		return err
+	}
+	if reserved {
+		return nil
+	}
+	// 余额不足：扣完剩余额度，差额记为冲销。
+	remaining, err := model.GetUserQuota(w.userId, false)
+	if err != nil {
+		return err
+	}
+	if remaining > delta {
+		remaining = delta
+	}
+	if remaining <= 0 {
+		w.overdraft += delta
+		return nil
+	}
+	reserved, err = model.TryReserveUserQuota(w.userId, remaining)
+	if err != nil {
+		return err
+	}
+	if reserved {
+		w.overdraft += delta - remaining
+		return nil
+	}
+	// 并发竞争导致剩余额度也扣不动：整笔差额记为冲销。
+	w.overdraft += delta
+	return nil
 }
 
 func (w *WalletFunding) Refund() error {

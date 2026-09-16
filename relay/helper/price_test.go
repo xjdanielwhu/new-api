@@ -695,3 +695,90 @@ func TestModelPriceHelperNativeGeminiNoThinkingDoesNotAliasBillingModel(t *testi
 	assert.Equal(t, 1.25, priceData.ModelRatio)
 	assert.NotEqual(t, 37.5, priceData.ModelRatio)
 }
+
+// 文本请求未指定 max_tokens 时也按兜底值预估补全开销，避免只按输入预扣导致
+// 长输出请求在结算时把余额扣成负数；不产生补全 token 的请求保持原价。
+func TestModelPriceHelperRatioPreConsumeCoversCompletionTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	savedRatios := ratio_setting.ModelRatio2JSONString()
+	savedGroupRatios := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroupRatios))
+	})
+
+	ratios := ratio_setting.GetModelRatioCopy()
+	ratios["ratio-fallback-model"] = 2
+	ratioJSON, err := common.Marshal(ratios)
+	require.NoError(t, err)
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratioJSON)))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"free":0}`))
+
+	const promptTokens = 1000
+	for _, tc := range []struct {
+		name      string
+		request   dto.Request
+		group     string
+		maxTokens int
+		want      int
+	}{
+		{
+			// (1000 + 8192) * 2
+			name:    "chat without max_tokens reserves the fallback completion estimate",
+			request: &dto.GeneralOpenAIRequest{},
+			group:   "default",
+			want:    18384,
+		},
+		{
+			// (1000 + 100) * 2
+			name:      "chat with max_tokens uses the client value verbatim",
+			request:   &dto.GeneralOpenAIRequest{},
+			group:     "default",
+			maxTokens: 100,
+			want:      2200,
+		},
+		{
+			name:    "responses without max output tokens reserves the fallback",
+			request: &dto.OpenAIResponsesRequest{},
+			group:   "default",
+			want:    18384,
+		},
+		{
+			// 免费分组（倍率 0）不参与预扣费，也不补兜底值
+			name:    "free group stays zero",
+			request: &dto.GeneralOpenAIRequest{},
+			group:   "free",
+			want:    0,
+		},
+		{
+			// 图片按数量计价，不能被补全兜底放大
+			name:    "image request keeps its quantity pricing",
+			request: &dto.ImageRequest{},
+			group:   "default",
+			want:    2000,
+		},
+		{
+			// 嵌入请求没有补全 token
+			name:    "embedding request has no completion cost",
+			request: &dto.EmbeddingRequest{},
+			group:   "default",
+			want:    2000,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Set("group", tc.group)
+			info := &relaycommon.RelayInfo{
+				OriginModelName: "ratio-fallback-model",
+				UserGroup:       tc.group,
+				UsingGroup:      tc.group,
+				Request:         tc.request,
+			}
+
+			priceData, err := ModelPriceHelper(ctx, info, promptTokens, &types.TokenCountMeta{MaxTokens: tc.maxTokens})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, priceData.QuotaToPreConsume)
+		})
+	}
+}
