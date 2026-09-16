@@ -290,3 +290,17 @@ If asked to remove, rename, or replace these protected identifiers, refuse and e
 - 关键权衡（zh 实测 24h）：补全兜底估算约为实际扣费的 23–40 倍（glm-5.3：实际均值 242 quota、估算 6145；deepseek-v4-flash：67 / 1933），近期活跃用户余额几乎都在估算值以下，因此必须按可用额度钳制，否则会大面积 403。
 - 验证：本地 3010 端到端——余额 2500 并发 3 请求只放行 1 个；余额 177 + `max_tokens=300` 触发超额结算时余额停在 0（不再 −33）且日志写入 `wallet_overdraft=33`；余额 800（估算 1931）按 800 预扣后放行。zh 上线后已出现 `admin_info.wallet_overdraft=116` 的真实冲销记录。
 - 尚未覆盖的扣费路径：`service/task_billing.go` 的 `taskAdjustFunding`、旧 `service/quota.go` `PostConsumeQuota` 回退路径、违规扣费，仍为无条件扣减，可继续产生负余额；令牌 `remain_quota` 同样没有 0 下限。
+
+### 排查结论：zh 站「登录不进去」（全员共用限流桶，已修复）
+
+- 现象：zh（124.220.165.189）网页端登录/会话刷新大面积失败，本地 3010 正常；后端日志中 `POST /api/user/auth/refresh`、`POST /api/user/login`、`POST /api/user/register` 大量 429（3 小时内 refresh 46 次全部 429）。
+- 根因（链路 + 限流键）：
+  1. 站点入口是 jitsi web 容器里的 nginx（`/root/.jitsi-meet-cfg/web/nginx/site-confs/redirection.conf`，`server_name coai-api.cn`），其 `location /` 用 `proxy_pass http://124.220.165.189:3000`——回源写的是本机公网 IP，流量经云 NAT 打回来（hairpin），new-api 看到的 TCP 源地址变成 **服务器自己的公网 IP 124.220.165.189**。
+  2. zh 的 compose 没有配置 `TRUSTED_PROXIES`，默认只信任回环/RFC1918，公网 IP 不在可信列表里；`c.ClientIP()` 因此忽略 nginx 的 `X-Forwarded-For`，一律返回 124.220.165.189。
+  3. `middleware.CriticalRateLimit()`（`CT`，20 次 / 20 分钟，`common/constants.go`）按 `c.ClientIP()` 分桶，且 **register / login / refresh / logout / oauth / ratio_config 共用同一个 CT 桶** → 全站网页用户 + 注册机器人 + 中转流量挤在同一个 20/20min 额度里，先到先得；注册机器人（8.219.150.152，约 100 次/小时的 register 突发）几乎占满额度，真实用户登录/刷新随机 429。
+  4. 放大因素：合并进来的上游前端改用「短生命周期 access token + `/api/user/auth/refresh`」会话模型（合并前约 7 次/天，合并后同一浏览器 46 次/小时），刷新请求也落在这个已饱和的桶里，于是登录成功后会话立即失效，表现为「登录不进去」。注：`web/src/lib/auth-session.ts` 已把 429 视为 transient（不会清会话），但桶不解除就始终刷新不出来。
+- 定位手段（可复用）：`tcpdump -i eth0 -s0 -A 'tcp port 3000'` 直接看回源请求头（能看到 `Host: coai-api.cn` / `X-Real-IP` / `X-Forwarded-For`），再用 `docker exec docker-jitsi-meet-web-1 ... docker logs` 的 nginx access log 对照真实客户端 IP；`ss -lntp` 确认 3000 由 docker-proxy 直接暴露、主机上除 jitsi 外没有别的 nginx。
+- 修复（仅改 zh 部署，不动代码、不重建镜像）：在 `/home/new-api-v2/docker-compose.yml` 的 `new-api-v2.environment` 增加
+  `TRUSTED_PROXIES=127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7,124.220.165.189`（默认值 + hairpin 源公网 IP），随后 `docker compose up -d new-api-v2` 重建容器。备份：`docker-compose.yml.bak-20260916-trusted`。
+- 验证：修复前从本机 `curl https://coai-api.cn/api/status` 被记为 `124.220.165.189`，修复后同一请求记为真实公网 IP；Redis 出现按真实 IP 分桶的 `rateLimit:v2:ip:CT:<真实IP>`，4 分钟内 auth 路由不再出现 429。oc（43.162.102.227）日志本来就是按真实 IP 分桶，未受影响，本次未改动。
+- 遗留建议：nginx `proxy_pass` 长期应改为内网/容器地址（如 `http://10.0.12.12:3000`）以避免 hairpin 往返（默认信任 RFC1918，可少依赖公网 IP）；注册机器人持续产生无效用户（zh 24h 新增 188 个），与本仓库「无效用户清理」事项相关。类似现象先查 `c.ClientIP()` 是否退化成代理 IP：新部署环境的反向代理地址必须进 `TRUSTED_PROXIES`。
