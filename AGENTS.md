@@ -304,3 +304,45 @@ If asked to remove, rename, or replace these protected identifiers, refuse and e
   `TRUSTED_PROXIES=127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7,124.220.165.189`（默认值 + hairpin 源公网 IP），随后 `docker compose up -d new-api-v2` 重建容器。备份：`docker-compose.yml.bak-20260916-trusted`。
 - 验证：修复前从本机 `curl https://coai-api.cn/api/status` 被记为 `124.220.165.189`，修复后同一请求记为真实公网 IP；Redis 出现按真实 IP 分桶的 `rateLimit:v2:ip:CT:<真实IP>`，4 分钟内 auth 路由不再出现 429。oc（43.162.102.227）日志本来就是按真实 IP 分桶，未受影响，本次未改动。
 - 遗留建议：nginx `proxy_pass` 长期应改为内网/容器地址（如 `http://10.0.12.12:3000`）以避免 hairpin 往返（默认信任 RFC1918，可少依赖公网 IP）；注册机器人持续产生无效用户（zh 24h 新增 188 个），与本仓库「无效用户清理」事项相关。类似现象先查 `c.ClientIP()` 是否退化成代理 IP：新部署环境的反向代理地址必须进 `TRUSTED_PROXIES`。
+
+### 运维记录：机器人注册清理与注册防护（zh，2026-09-17）
+
+- 背景：zh 自 2026-09-08 起被机器人批量注册，用户名两套模式——「英文名+数字」（`JeremyRogers198`）或 10–12 位随机串（`u0a2rak80`）。7 天新增 1166 个，**全部没有邮箱、没有充值**，其中 893 个产生调用消耗约 $16.05；同期真实充值仅 2 人。
+- 判定分段（按需组合，均为只读查询）：
+  - 僵尸号：`role=1 AND email='' AND used_quota=0 AND created_at < NOW()-INTERVAL 3 DAY AND NOT EXISTS(成功 top_ups)`
+  - 薅额度号：同上但 `used_quota>0`
+- **删除必须走 admin API `DELETE /api/user/:id`（`controller/user.go` `DeleteUser` → `model/user.go` `HardDeleteUserById`），禁止 SQL 直删 `users`。** 原因在删除事务之外：`IncrementUserAuthVersionWithTx` + `publishCommittedUserAuthVersion`（Redis auth tombstone，**Redis 不可用时 fail-closed 直接拒绝删除**）+ `RevokeAllUserSessions` + 用户/令牌缓存失效。SQL 直删会留下仍可用的 token/session 行和 Redis 缓存，直到 TTL 过期。
+- 该路径级联清空：`users`(硬删)、`tokens`、`two_fas`、`two_fa_backup_codes`、`user_sessions`、`auth_flows`、`passkey_credentials`、`user_oauth_bindings`、`external_identity_claims`。
+- 该路径**不**触碰账本类表：`logs`、`quota_data`、`top_ups`、`redemptions`、`tasks`、`checkins`、`user_subscriptions`。账号是可回收实体、流水是不可变账本，这是预期行为；`logs` 与 `quota_data` 都自带 `username` 快照，删号后仍可按主体追溯（前端日志列直接渲染 `log.username`，不与 `users` 联表）。
+- 保护规则（批量清理时必带）：`id <= 40`（自建测试/安全测试账号）、用户名关键词（`admin`/`coai`/`wykj`/`probe`/`kv_`/`test`/`root`/`boss`/`ceo`）、任何存在 `top_ups` 行的账号（保证财务记录不孤儿）、`role <> 1`。建议用 `LOCATE('kw', username)=0` 而非 `LIKE '%kw%'`，避免下划线等 LIKE 通配符转义问题。
+- 执行方式：取 root 的 `access_token` 后 `curl -X DELETE -H "Authorization: <token>" http://127.0.0.1:3000/api/user/<id>` 逐条删除（`Authorization` 单 token 走 `model.ValidateAccessToken`）。`DELETE /api/user/:id` 只挂 `AdminAuth()`，**不占用 `CriticalRateLimit` 的 `CT` 桶**，但受 `GlobalAPIRateLimit()` 约束（默认 360 次 / 180 秒 / 按 IP 分桶），因此按 `sleep 0.7`（≈1.4 req/s）限速；一次 590 条约 7 分钟。
+- 备份：`mysqldump --no-create-info --complete-insert --single-transaction --where="<同判定条件>"`，逐表导出 `users` 与 `tokens`/`user_sessions`/`two_fas`/`two_fa_backup_codes`/`passkey_credentials`/`auth_flows`/`user_oauth_bindings`/`external_identity_claims`（`--where="user_id IN (SELECT id FROM users WHERE <条件>)"`）。导出后用 `grep -o '),(' | wc -l + 1` 与库内 `COUNT(*)` 逐表比对，必须相等。
+- 校验（三条硬指标，缺一不可）：
+  - 目标集合残留为 0；
+  - 全库孤儿行算术闭合：`孤儿 logs 增量 = 本批保留的 logs 行数`，`孤儿 uid 增量 = 删除账号数`，且 `tokens`/`user_sessions`/`top_ups` 孤儿为 0；
+  - 取备份里已删账号的旧 `tokens.key` 调 `/v1/models`，必须返回 401（实测凭证已失效）。
+- 2026-09-17 zh 三批结果（备份全部在 zh `/root/bot-cleanup-20260917/`）：你手动 16 个；A 段 367 个（`bot-cleanup-20260917.tar.gz`，md5 `430b2d579ca6cc2cf7cbb868a6d25b1e`）；B 段 590 个（`bot-cleanup-b-staged.tar.gz`，md5 `07ec6749bd3a23a142fe701aa670b2e4`）；C 段 432 个（`bot-cleanup-c-staged.tar.gz`，md5 `c4787306938d9f03c4acc97722cf4472`）。最终账号 1430 → 41（root 1 + 自建测试 39 + 真人测试号 `zxq_test_1` 1）。
+- 账本留存（一条未删）：`logs` 40,279 行（其中消费流水 17,489 行，累计 8,027,332 quota ≈ $16.05）、`quota_data` 孤儿聚合 5,373 行（占全表 5,742 行的 93%，对应 17,486 次请求）。副作用：后台「按用户消耗」图仍会显示已删账号；若要让仪表盘干净需单独清 `quota_data`，属独立决策（会改动历史统计）。
+- 清理顺带解决负余额遗留：B 段整批包含透支为负的账号，清理后全站仅剩自建测试号 `id 6` 为负（−1470 quota），即「文本请求余额透支」条目里 zh 历史遗留的 244 个负余额账号已随本次清理退场。
+- 注册防护（纯配置，`SYNC_FREQUENCY=60` 热生效，不需重启、不需改代码）：
+  - `EmailVerificationEnabled=true`：注册必须带 email + 验证码（`controller/user.go` `Register`）。
+  - `EmailDomainRestrictionEnabled=true` + `EmailDomainWhitelist=<逗号分隔，不能带空格>`：校验实现在 `service.ValidateAccountEmail`（`service/email_binding.go`），被注册发信口 `controller/misc.go` 与邮箱绑定口 `controller/email_binding.go` 复用；入口先过 `model.NormalizeEmail`（`strings.ToLower` + Trim），所以域名匹配实际大小写不敏感。拒绝响应为 `{"code":"EMAIL_ADDRESS_REJECTED"}`。
+  - 拦截链闭合：注册必须先持有验证码，而验证码只能从受白名单校验的发信口取得，故临时邮箱拿不到码、注册不成立。存量用户不受影响（域名校验只在发码/绑定时机生效，登录不查域名）。
+  - zh 白名单为 24 个域名：`gmail.com 163.com 126.com qq.com outlook.com hotmail.com icloud.com yahoo.com foxmail.com sina.com sina.cn sohu.com 139.com 189.cn aliyun.com live.com msn.com me.com yeah.net vip.qq.com 21cn.com 263.net 88.com wykj.asia`。
+- 踩过的坑（重要）：
+  1. **只开邮箱验证挡不住机器人**：它们会用 `maildrop.cc`、`inboxkitten.com` 等公开临时邮箱接码（zh 2026-09-17 09:49 实测两次 `/api/verification` 请求即此类）。必须叠加域名白名单（或 Turnstile）才闭合。
+  2. 域名白名单是**精确匹配、不覆盖子域**，`xxx@tsinghua.edu.cn` 这类需把完整域名逐个加入；客户企业邮箱同理。
+  3. `TurnstileCheckEnabled` 是**单开关**，同时管 `register`/`login`/`reset_password`/`verification`/`checkin`（`router/api-router.go`），且 `middleware/turnstile-check.go` 对 Cloudflare 不可达是 **fail-closed（会让全员登录失败）**，大陆自建站上线前必须评估；另外 Turnstile **不需要**把域名 DNS 迁到 Cloudflare，只要在控制台建 widget 填域名即可。
+  4. 「注册满 3 天」是**滚动窗口**：跨过 3 天线的账号会陆续落入可删集合（zh 两批之间就有 2 个账号刚好跨线），清理不能只跑一次。
+  5. SMTP 535 `authentication failed` 先直连验授权码（`smtplib.SMTP_SSL('smtp.exmail.qq.com',465).login(...)`）再怀疑代码；zh 本次根因是账号名写错——实际为 `post_asist@wykj.asia`（下划线）而非 `post-asist@`（连字符）。
+  6. 排查机器人注册时注意 `/api/user/register` 业务失败也返回 **HTTP 200**（body `success:false`），只看状态码会误判为注册成功；要读 body 或用 nginx/应用日志的响应体。
+
+### 运维记录：oc 升级 + 注册防护 + 机器人清理（oc，2026-09-18）
+
+- 升级采用**直接复用本地已验证镜像**而非重建：本地 `new-api-v2:local` 构建时间晚于最后一个代码提交（09-16 15:49 vs 15:42），且已在本地 3010 与 zh 跑了 30+ 小时，避免重新构建引入差异。构建前提确认：`web/dist` 需晚于前端源码改动（合并后 09-15 15:28 已重建），`web/classic/dist` 自 08-26 无源码变动故无需重建；两者都被 `web/.gitignore` 忽略（本地产物，不入库）。
+- 备份（必须先于 `docker load`，因为 load 会把同名旧镜像转成悬空 ID）：`docker tag new-api-v2:local new-api-v2:local.bak-YYYYMMDD` + `mysqldump --single-transaction | gzip` + `cp docker-compose.yml`。本次：`local.bak-20260918` → `1ed3812c14e8`、`/root/oc-db-before-merge-20260918.sql.gz`、`docker-compose.yml.bak-20260918`。升级后必须复查备份 tag 仍指向旧 ID。
+- **oc 的清理判定不能用 zh 的 `email=''` 或 id 段规则**：oc 全站只有 1 个带邮箱账号（就是 root），早期真实/测试账号也无邮箱且分散在 id 1–552；改用「机器人命名正则 + 无任何 `top_ups` 行 + 业务关键词排除」并**人工确认波次边界**。oc 两波：2026-08-21（150 个账号 25 分钟内建完，每个固定 3 次请求 / 188 额度）与 09-07 起（09-16 330 个、09-17 473 个）。08-21 之前的 13 个（`ctfwulala`、`xjdaniel`、`xjmsw4gmzzcf5`、`hagaharu`、`jun*` 等）与 zh 受保护账号同源，全部保留。
+- oc 结果：清理 **2,331** 个（`id` 46–2387，零失败），账号 2,363 → **32**（root 1 + 早期真实/测试 27 + 5 个付费用户），备份 `/root/oc-cleanup-20260918/oc-cleanup-20260918.tar.gz`（md5 `bbb815ef0cb877b5ef4c5f3a1cb2e58f`，2331 users / 1775 tokens / 3122 sessions / 0 top_ups，id 集合与删除清单逐一比对一致）。账本保留：**39,966** 条 `logs`。已删账号旧 token 实测 401，付费用户（`codexusr111` 526 次 / `cooaiuser113` 152 次）令牌完好，近 5 分钟 336 次成功转发，服务未受影响。
+- **定位刷量来源的方法（可复用）**：`logs.ip` 在 oc 上大量为空（近 24h 仅 587/7126 行有 IP），无法用 `logs` 反查；改用「GIN 访问日志取该 IP 的 request_id → 回查 `logs.request_id`」得到账号。oc 上 `107.173.42.94` 经此确认为机器人农场出口 IP（2 小时 2,159 次请求，93 次成功请求命中 23+ 个「英文名+数字」账号，全部注册于使用前几分钟、每个只烧光 1000 免费额度即弃号），并非大客户。注意 GIN 日志按 `|` 分字段：状态码是第 4 段、耗时第 5、IP 第 6、路径第 7，取错字段会把状态码当成 request_id。
+- oc 防护配置（热生效，未改代码）：`EmailVerificationEnabled=true` + `EmailDomainRestrictionEnabled=true`，白名单按海外调整（`gmail.com/outlook.com/hotmail.com/live.com/msn.com/icloud.com/me.com/yahoo.com/aol.com/gmx.com/mail.com/zoho.com/yandex.com/proton.me/protonmail.com/163.com/126.com/qq.com/foxmail.com/sina.com/aliyun.com/wykj.asia`）。**顺手修掉了 oc 原有白名单的 ` aliyun.com` 前导空格 bug**（`strings.Split(value, ",")` 不做 trim，带空格的项永远匹配不上）。实测：`maildrop.cc`/`inboxkitten.com` 被 `EMAIL_ADDRESS_REJECTED` 拒，`wykj.asia` 放行，无邮箱注册被拦，30 分钟内新增注册 0。
+- oc 已知遗留：① 存在 1 个**历史孤儿令牌**（`tokens.id=5`，`user_id=6`，名为 `agi-agent`，2026-08-06 创建，user 6 已不存在）——这是早前绕过应用层删除留下的脏数据，与本次无关，可按 id 单独清理；② 农场 IP `107.173.42.94` 仍在用废 key 刷 401（近 5 分钟 1,110 次），建议在入口层直接封禁；③ `EmailDomainWhitelist` 在 oc 上会拦下企业域名（实测 `somecorp.io` 被拒），若影响真实注册可一行 SQL 关闭 `EmailDomainRestrictionEnabled`。
