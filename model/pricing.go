@@ -341,7 +341,7 @@ func updatePricing() {
 			}
 			pricing.Description = meta.Description
 			pricing.Icon = meta.Icon
-			pricing.Tags = meta.Tags
+			pricing.Tags = FilterTokenCountTags(meta.Tags)
 			pricing.VendorID = meta.VendorID
 		}
 		modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
