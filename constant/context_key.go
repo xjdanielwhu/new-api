@@ -72,8 +72,9 @@ const (
 	ContextKeyAuditLogged ContextKey = "audit_logged"
 
 	// ContextKeyLanguage stores the user's language preference for i18n
-	ContextKeyLanguage ContextKey = "language"
-	ContextKeyIsStream ContextKey = "is_stream"
+	ContextKeyLanguage             ContextKey = "language"
+	ContextKeyIsStream             ContextKey = "is_stream"
+	ContextKeyResponseStreamStatus ContextKey = "response_stream_status"
 
 	// ContextKeyTokenAuditParams contains only the API token operation's safe metadata.
 	ContextKeyTokenAuditParams ContextKey = "token_audit_params"
