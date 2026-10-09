@@ -15,6 +15,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/tokenkit"
 	"github.com/gin-gonic/gin"
 )
 
@@ -375,7 +376,7 @@ func perMessageTokenCounts(messages []any, model string) []int {
 		if tcID, ok := mm["tool_call_id"].(string); ok {
 			sb.WriteString(tcID)
 		}
-		counts[i] = service.CountTextToken(sb.String(), model) + 4
+		counts[i] = tokenkit.Count(model, sb.String()) + 4
 		counts[i] += messageImageCount(m) * flatImageTokenEstimate
 	}
 	return counts
