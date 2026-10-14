@@ -3,7 +3,6 @@ package oairesponses
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -237,40 +236,59 @@ func responsesFunctionCallItemToClaudeToolUse(item map[string]any) dto.ClaudeMed
 // tool_result content. A Responses content-part array becomes the text, image,
 // and document blocks tool_result accepts; stringifying it instead would hand
 // base64 media to the upstream text tokenizer. An array holding any other part
-// type, or media that cannot be resolved, keeps the stringified form, and other
+// type or media that cannot be resolved falls back to a text label, and other
 // payload shapes pass through unchanged.
 func responsesToolOutputToClaude(c context.Context, value any) any {
-	rawParts, ok := value.([]any)
-	if !ok || len(rawParts) == 0 {
-		if value == nil {
-			return ""
-		}
-		return value
+	if value == nil {
+		return ""
 	}
-	labels := make([]string, 0, len(rawParts))
-	for _, rawPart := range rawParts {
-		part, isMap := rawPart.(map[string]any)
-		if !isMap {
-			return responseToolOutputToChatContent(value)
-		}
+	switch value.(type) {
+	case string:
+		return value
+	case []any, []map[string]any:
+	default:
+		return responseToolOutputToChatContent(value)
+	}
+
+	rawParts, err := ContentParts(value)
+	if err != nil || len(rawParts) == 0 {
+		return responseToolOutputToChatContent(value)
+	}
+
+	fallback := make([]string, 0, len(rawParts))
+	hasMedia := false
+	for _, part := range rawParts {
 		switch partType := strings.TrimSpace(kitutil.Interface2String(part["type"])); partType {
 		case "input_text", "output_text", "text":
-		case "input_image", "input_file", "input_audio", "input_video":
-			if label := "[" + strings.TrimPrefix(partType, "input_") + "]"; !slices.Contains(labels, label) {
-				labels = append(labels, label)
+			if text := kitutil.Interface2String(part["text"]); text != "" {
+				fallback = append(fallback, text)
 			}
+		case "input_image", "input_file", "input_audio", "input_video":
+			hasMedia = true
+			label := "[" + strings.TrimPrefix(partType, "input_") + "]"
+			fallback = append(fallback, label)
 		default:
 			return responseToolOutputToChatContent(value)
 		}
 	}
+	if !hasMedia {
+		return strings.Join(fallback, "\n")
+	}
+
 	blocks, err := responsesInputContentToClaudeMediaMessages(c, rawParts)
 	if err != nil {
-		return responseToolOutputToChatContent(value)
+		convdiag.Add(c, types.ConversionDiagnostic{
+			Code:     "unsupported_media_type",
+			Path:     "input.function_call_output.output",
+			Message:  "Claude Messages could not resolve tool output media; the media was replaced with a label",
+			Severity: types.ConversionDiagnosticError,
+		})
+		return strings.Join(fallback, "\n")
 	}
 	if len(blocks) == 0 {
 		// Every media part was omitted with a diagnostic; name what was there
 		// instead of sending the payload as text.
-		return strings.Join(labels, " ")
+		return strings.Join(fallback, "\n")
 	}
 	return blocks
 }

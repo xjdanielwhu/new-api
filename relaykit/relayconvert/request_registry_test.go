@@ -445,6 +445,49 @@ func customToolHistoryRequest(t *testing.T, items ...map[string]any) *dto.OpenAI
 	}
 }
 
+func TestConvertRequestResponsesToClaudeConvertsToolOutputImages(t *testing.T) {
+	const dataURL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+	req := &dto.OpenAIResponsesRequest{
+		Model:           "claude-opus-5",
+		MaxOutputTokens: lo.ToPtr(uint(64)),
+		Input: mustRawMessage(t, []map[string]any{
+			{"role": "user", "content": "inspect the screenshot"},
+			{"type": "function_call", "call_id": "call_image", "name": "view_image", "arguments": "{}"},
+			{"type": "function_call_output", "call_id": "call_image", "output": []any{
+				map[string]any{"type": "input_text", "text": "screenshot ready"},
+				map[string]any{"type": "input_image", "image_url": dataURL},
+			}},
+		}),
+		Tools: mustRawMessage(t, []map[string]any{{
+			"type": "function", "name": "view_image", "parameters": map[string]any{"type": "object"},
+		}}),
+	}
+
+	result, err := ConvertRequest(nil, &convmeta.Values{}, types.RelayFormatClaude, req)
+	require.NoError(t, err)
+	claudeReq, ok := result.Value.(*dto.ClaudeRequest)
+	require.True(t, ok)
+	require.Len(t, claudeReq.Messages, 3)
+
+	toolResults, err := claudeReq.Messages[2].ParseContent()
+	require.NoError(t, err)
+	require.Len(t, toolResults, 1)
+	assert.Equal(t, "tool_result", toolResults[0].Type)
+
+	parts, err := kitutil.Any2Type[[]dto.ClaudeMediaMessage](toolResults[0].Content)
+	require.NoError(t, err)
+	require.Len(t, parts, 2)
+	assert.Equal(t, "text", parts[0].Type)
+	assert.Equal(t, "screenshot ready", parts[0].GetText())
+	assert.Equal(t, "image", parts[1].Type)
+	require.NotNil(t, parts[1].Source)
+	assert.Equal(t, "image/png", parts[1].Source.MediaType)
+
+	converted, err := kitutil.Marshal(claudeReq)
+	require.NoError(t, err)
+	assert.NotContains(t, string(converted), `"type":"input_image"`)
+}
+
 func TestConvertRequestResponsesToClaudeKeepsCustomToolHistory(t *testing.T) {
 	for _, tc := range customToolInputs {
 		t.Run(tc.name, func(t *testing.T) {

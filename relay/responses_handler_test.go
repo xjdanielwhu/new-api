@@ -516,24 +516,41 @@ func TestNormalizeResponsesToolSchemas_RewritesGeneratedSchema(t *testing.T) {
 		"required": [],
 		"type": "object"
 	}`
-	raw := []byte(`[{"type":"function","function":{"name":"automation_update","parameters":` + params + `}},{"type":"function","function":{"name":"exec_command","parameters":{"type":"object","properties":{"cmd":{"type":"string"}}}}}]`)
+	// Real Responses tool wire shape: "parameters" sits directly on the tool
+	// object, not nested under "function" (that nesting belongs to Chat
+	// Completions). The Codex app sends automation_update this way, and also
+	// nested inside a "mcp__codex_app" namespace tool's "tools" array.
+	raw := []byte(`[` +
+		`{"type":"function","name":"automation_update","parameters":` + params + `},` +
+		`{"type":"function","name":"exec_command","parameters":{"type":"object","properties":{"cmd":{"type":"string"}}}},` +
+		`{"type":"namespace","name":"mcp__codex_app","tools":[` +
+		`{"name":"automation_update","parameters":` + params + `}` +
+		`]}` +
+		`]`)
 	out, n := normalizeResponsesToolSchemas(raw)
-	require.Equal(t, 1, n, "only the generated schema is rewritten")
+	require.Equal(t, 2, n, "the top-level and namespaced generated schemas are both rewritten")
 	var tools []map[string]any
 	require.NoError(t, common.Unmarshal(out, &tools))
-	require.Len(t, tools, 2)
-	norm, _ := tools[0]["function"].(map[string]any)["parameters"].(map[string]any)
+	require.Len(t, tools, 3)
+	norm, _ := tools[0]["parameters"].(map[string]any)
 	require.NotNil(t, norm)
 	require.NotContains(t, norm, "$defs")
 	require.NotContains(t, norm, "oneOf")
 	require.Equal(t, "object", norm["type"])
 	require.Equal(t, "create", norm["properties"].(map[string]any)["mode"].(map[string]any)["enum"].([]any)[1])
-	plain, _ := tools[1]["function"].(map[string]any)["parameters"].(map[string]any)
+	plain, _ := tools[1]["parameters"].(map[string]any)
 	require.Equal(t, map[string]any{"type": "string"}, plain["properties"].(map[string]any)["cmd"])
+	namespaceTools, _ := tools[2]["tools"].([]any)
+	require.Len(t, namespaceTools, 1)
+	namespaceMember, _ := namespaceTools[0].(map[string]any)
+	namespaceNorm, _ := namespaceMember["parameters"].(map[string]any)
+	require.NotNil(t, namespaceNorm)
+	require.NotContains(t, namespaceNorm, "$defs")
+	require.NotContains(t, namespaceNorm, "oneOf")
 }
 
 func TestNormalizeResponsesToolSchemas_PlainSchemasUntouched(t *testing.T) {
-	raw := []byte(`[{"type":"function","function":{"name":"exec_command","parameters":{"type":"object","properties":{"cmd":{"type":"string"}}}}}]`)
+	raw := []byte(`[{"type":"function","name":"exec_command","parameters":{"type":"object","properties":{"cmd":{"type":"string"}}}}]`)
 	out, n := normalizeResponsesToolSchemas(raw)
 	require.Equal(t, 0, n)
 	require.Equal(t, string(raw), string(out), "original bytes must be returned when nothing changed")

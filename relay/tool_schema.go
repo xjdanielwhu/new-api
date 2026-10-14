@@ -30,7 +30,10 @@ func normalizeChatToolSchemas(request *dto.GeneralOpenAIRequest) int {
 // normalizeResponsesToolSchemas is the /v1/responses variant of
 // normalizeChatToolSchemas. Tools travel as an opaque JSON array there, so the
 // raw message is parsed, rewritten and re-marshaled only when at least one tool
-// schema changed; otherwise the original bytes are returned.
+// schema changed; otherwise the original bytes are returned. Unlike Chat
+// Completions, a Responses function tool carries "parameters" directly on the
+// tool object instead of a nested "function"; a namespace tool additionally
+// nests its member tools under "tools", so each member is checked too.
 func normalizeResponsesToolSchemas(tools json.RawMessage) (json.RawMessage, int) {
 	if len(tools) == 0 || string(tools) == "null" {
 		return tools, 0
@@ -40,23 +43,19 @@ func normalizeResponsesToolSchemas(tools json.RawMessage) (json.RawMessage, int)
 		return tools, 0
 	}
 	normalized := 0
-	for i, item := range list {
+	for _, item := range list {
 		tool, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		fn, ok := tool["function"].(map[string]any)
-		if !ok {
-			continue
+		normalized += normalizeResponsesToolParameters(tool)
+		if members, ok := tool["tools"].([]any); ok {
+			for _, member := range members {
+				if memberTool, ok := member.(map[string]any); ok {
+					normalized += normalizeResponsesToolParameters(memberTool)
+				}
+			}
 		}
-		params := fn["parameters"]
-		if !relayconvert.IsComplexToolParameters(params) {
-			continue
-		}
-		fn["parameters"] = relayconvert.NormalizeToolParameters(params)
-		tool["function"] = fn
-		list[i] = tool
-		normalized++
 	}
 	if normalized == 0 {
 		return tools, 0
@@ -66,4 +65,17 @@ func normalizeResponsesToolSchemas(tools json.RawMessage) (json.RawMessage, int)
 		return tools, 0
 	}
 	return out, normalized
+}
+
+// normalizeResponsesToolParameters rewrites the "parameters" field in place on
+// a single Responses tool object (a top-level function tool or a namespace
+// member) when it uses a generated schema shape. It returns 1 when rewritten,
+// 0 otherwise.
+func normalizeResponsesToolParameters(tool map[string]any) int {
+	params, exists := tool["parameters"]
+	if !exists || !relayconvert.IsComplexToolParameters(params) {
+		return 0
+	}
+	tool["parameters"] = relayconvert.NormalizeToolParameters(params)
+	return 1
 }
