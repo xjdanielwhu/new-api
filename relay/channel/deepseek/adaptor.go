@@ -168,8 +168,81 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(_ *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
+	if err := normalizeDeepSeekResponsesWebSearchCalls(&request); err != nil {
+		return nil, err
+	}
 	applyDeepSeekV4ResponsesThinkingSuffix(info, &request)
 	return request, nil
+}
+
+// DeepSeek's Responses endpoint requires both the top-level queries field and
+// action.queries for replayed web_search_call items. OpenAI's canonical form
+// may only carry action.query, so normalize the item before forwarding.
+func normalizeDeepSeekResponsesWebSearchCalls(request *dto.OpenAIResponsesRequest) error {
+	if request == nil || len(request.Input) == 0 {
+		return nil
+	}
+	var input []any
+	if err := common.Unmarshal(request.Input, &input); err != nil {
+		return nil
+	}
+	changed := false
+	for _, item := range input {
+		itemMap, ok := item.(map[string]any)
+		if !ok || itemMap["type"] != "web_search_call" {
+			continue
+		}
+		action, ok := itemMap["action"].(map[string]any)
+		if !ok {
+			continue
+		}
+		actionType, _ := action["type"].(string)
+		if actionType != "" && actionType != "search" {
+			continue
+		}
+		queries := responsesWebSearchQueries(action["queries"])
+		if len(queries) == 0 {
+			if query, _ := action["query"].(string); query != "" {
+				queries = []string{query}
+			}
+		}
+		if len(queries) == 0 {
+			queries = responsesWebSearchQueries(itemMap["queries"])
+		}
+		if len(queries) == 0 {
+			continue
+		}
+		action["type"] = "search"
+		action["queries"] = queries
+		delete(action, "query")
+		itemMap["action"] = action
+		itemMap["queries"] = queries
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	encoded, err := common.Marshal(input)
+	if err != nil {
+		return err
+	}
+	request.Input = encoded
+	return nil
+}
+
+func responsesWebSearchQueries(value any) []string {
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	queries := make([]string, 0, len(items))
+	for _, item := range items {
+		query, ok := item.(string)
+		if ok && query != "" {
+			queries = append(queries, query)
+		}
+	}
+	return queries
 }
 
 func applyDeepSeekV4ResponsesThinkingSuffix(info *relaycommon.RelayInfo, request *dto.OpenAIResponsesRequest) {
