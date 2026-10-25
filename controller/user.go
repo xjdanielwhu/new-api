@@ -239,6 +239,13 @@ func Register(c *gin.Context) {
 		common.ApiErrorT(c, "Invalid input {{error}}", map[string]any{"error": err.Error()})
 		return
 	}
+	if user.Email != "" {
+		user.Email, err = service.ValidateAccountEmail(user.Email)
+		if err != nil {
+			writeSecurityOperationError(c, err)
+			return
+		}
+	}
 	if common.EmailVerificationEnabled {
 		if user.Email == "" || user.VerificationCode == "" {
 			common.ApiErrorT(c, "Email verification is enabled, please enter email address and verification code")

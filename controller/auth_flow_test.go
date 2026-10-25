@@ -67,6 +67,49 @@ func beginSecurityLoginPasskey(t *testing.T, parentToken string) (string, string
 	return result.Data.FlowToken, result.Data.Options.PublicKey.Challenge
 }
 
+func TestRegisterRejectsEmailsBlockedByAccountPolicy(t *testing.T) {
+	previousRegisterEnabled := common.RegisterEnabled
+	previousPasswordRegisterEnabled := common.PasswordRegisterEnabled
+	previousEmailVerification := common.EmailVerificationEnabled
+	previousDomainRestriction := common.EmailDomainRestrictionEnabled
+	previousAliasRestriction := common.EmailAliasRestrictionEnabled
+	previousWhitelist := common.EmailDomainWhitelist
+	t.Cleanup(func() {
+		common.RegisterEnabled = previousRegisterEnabled
+		common.PasswordRegisterEnabled = previousPasswordRegisterEnabled
+		common.EmailVerificationEnabled = previousEmailVerification
+		common.EmailDomainRestrictionEnabled = previousDomainRestriction
+		common.EmailAliasRestrictionEnabled = previousAliasRestriction
+		common.EmailDomainWhitelist = previousWhitelist
+	})
+
+	common.RegisterEnabled = true
+	common.PasswordRegisterEnabled = true
+	common.EmailVerificationEnabled = false
+	common.EmailDomainRestrictionEnabled = true
+	common.EmailAliasRestrictionEnabled = true
+	common.EmailDomainWhitelist = []string{"gmail.com"}
+
+	router := gin.New()
+	router.POST("/api/user/register", Register)
+	for _, email := range []string{"person+bot@gmail.com", "p.erson@gmail.com", "person@maildrop.cc"} {
+		t.Run(email, func(t *testing.T) {
+			body, err := common.Marshal(map[string]string{
+				"username": "email-policy", "password": "correct-horse", "email": email,
+			})
+			require.NoError(t, err)
+
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/user/register", strings.NewReader(string(body))))
+
+			var result securityEnrollmentResponse
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+			assert.False(t, result.Success)
+			assert.Equal(t, "EMAIL_ADDRESS_REJECTED", result.Code)
+		})
+	}
+}
+
 func TestSecurityLoginCodeCompletesOnce(t *testing.T) {
 	for _, test := range []struct {
 		path   string

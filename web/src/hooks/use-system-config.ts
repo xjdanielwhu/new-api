@@ -60,8 +60,14 @@ function preloadImage(
 export function useSystemConfig(options: UseSystemConfigOptions = {}) {
   const { autoLoad = false } = options
   const queryClient = useQueryClient()
-  const { config, loading, loadedLogoUrl, setLoadedLogoUrl, setLoading } =
-    useSystemConfigStore()
+  const {
+    config,
+    loading,
+    loadedLogoUrl,
+    setConfig,
+    setLoadedLogoUrl,
+    setLoading,
+  } = useSystemConfigStore()
 
   // Load config from backend via the shared `/api/status` cache.
   // `ensureStatus` writes the mapped config into this store itself, so there is
@@ -101,12 +107,16 @@ export function useSystemConfig(options: UseSystemConfigOptions = {}) {
           // eslint-disable-next-line no-console
           console.error('Failed to load logo:', logo)
         }
-        // Mark as loaded even on error to prevent infinite retry
-        setLoadedLogoUrl(logo)
+        // Fall back to the bundled logo so a stale remote URL cannot leave a
+        // broken image in the header. The effect then sees loadedLogoUrl equal
+        // to config.logo and does not retry the failing URL.
+        setConfig({ logo: DEFAULT_LOGO })
+        setLoadedLogoUrl(DEFAULT_LOGO)
+        applyFaviconToDom(DEFAULT_LOGO)
       }
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.logo, loadedLogoUrl, setLoadedLogoUrl])
+  }, [config.logo, loadedLogoUrl, setConfig, setLoadedLogoUrl])
 
   return {
     ...config,

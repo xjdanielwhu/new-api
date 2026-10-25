@@ -1,6 +1,7 @@
 package relayconvert
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -98,6 +99,11 @@ func TestNormalizeToolParameters_PlainSchemaUnchanged(t *testing.T) {
 	out := NormalizeToolParameters(plain)
 	assert.True(t, reflect.ValueOf(out).Pointer() == reflect.ValueOf(plain).Pointer(), "plain schemas must be returned untouched")
 
+	plainJSON := json.RawMessage(`{"type":"object","properties":{"z":{"type":"string"},"a":{"type":"number"}}}`)
+	rawOut, changed := NormalizeToolParametersJSON(plainJSON)
+	assert.False(t, changed)
+	assert.Equal(t, plainJSON, rawOut, "plain schemas must retain their exact bytes and property order")
+
 	var nilParams any
 	assert.Nil(t, NormalizeToolParameters(nilParams), "nil parameters untouched")
 	assert.Equal(t, "not-a-map", NormalizeToolParameters("not-a-map"), "non-map parameters untouched")
@@ -121,6 +127,14 @@ func TestNormalizeToolParameters_ResolvesRefWithSiblingType(t *testing.T) {
 	assertNoRefs(t, normalized)
 	props := normalized["properties"].(map[string]any)
 	assert.Equal(t, map[string]any{"type": "string"}, props["id"])
+
+	raw := json.RawMessage(`{"$defs":{"str":{"type":"string"}},"type":"object","properties":{"id":{"$ref":"#/$defs/str","type":"string"}}}`)
+	rawOut, changed := NormalizeToolParametersJSON(raw)
+	require.True(t, changed)
+	var decoded map[string]any
+	require.NoError(t, kitutil.Unmarshal(rawOut, &decoded))
+	assertNoRefs(t, decoded)
+	assert.Equal(t, map[string]any{"type": "string"}, decoded["properties"].(map[string]any)["id"])
 }
 
 func TestNormalizeToolParameters_CircularRefTerminates(t *testing.T) {
