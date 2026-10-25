@@ -1,8 +1,11 @@
 package relayconvert
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
+
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 )
 
 // toolSchemaRefPrefix matches the JSON Schema reference style emitted by code
@@ -34,6 +37,24 @@ func IsComplexToolParameters(params any) bool {
 		}
 	}
 	return false
+}
+
+// NormalizeToolParametersJSON applies NormalizeToolParameters to raw function
+// parameters. Plain schemas retain their original bytes and property order;
+// only generated schemas that require rewriting are decoded and re-marshaled.
+func NormalizeToolParametersJSON(params json.RawMessage) (json.RawMessage, bool) {
+	if len(params) == 0 || kitutil.GetJsonType(params) != "object" {
+		return params, false
+	}
+	var decoded any
+	if err := kitutil.Unmarshal(params, &decoded); err != nil || !IsComplexToolParameters(decoded) {
+		return params, false
+	}
+	normalized, err := kitutil.Marshal(NormalizeToolParameters(decoded))
+	if err != nil {
+		return params, false
+	}
+	return normalized, true
 }
 
 // NormalizeToolParameters rewrites a generated function parameters schema into a

@@ -19,8 +19,8 @@ func normalizeChatToolSchemas(request *dto.GeneralOpenAIRequest) int {
 	normalized := 0
 	for i := range request.Tools {
 		params := request.Tools[i].Function.Parameters
-		if relayconvert.IsComplexToolParameters(params) {
-			request.Tools[i].Function.Parameters = relayconvert.NormalizeToolParameters(params)
+		if rewritten, ok := relayconvert.NormalizeToolParametersJSON(params); ok {
+			request.Tools[i].Function.Parameters = rewritten
 			normalized++
 		}
 	}
